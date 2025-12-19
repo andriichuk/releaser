@@ -1,7 +1,7 @@
 {
     "name": "andriichuk/releaser",
     "description": "Release automation script for Laravel projects",
-    "keywords": ["release", "laravel", "git", "automation"]
+    "keywords": ["release", "laravel", "git", "automation"],
     "authors": [
         {
             "name": "Serhii Andriichuk",
