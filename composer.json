@@ -1,0 +1,23 @@
+{
+    "name": "andriichuk/releaser",
+    "description": "Release automation script for Laravel projects",
+    "keywords": ["release", "laravel", "git", "automation"]
+    "authors": [
+        {
+            "name": "Serhii Andriichuk",
+            "email": "andriichuk29@gmail.com"
+        }
+    ],
+    "type": "library",
+    "license": "MIT",
+    "bin": [
+        "releaser"
+    ],
+    "require": {
+        "php": ">=8.1"
+    },
+    "support": {
+        "issues": "https://github.com/andriichuk/releaser/issues"
+    }
+}
+
