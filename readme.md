@@ -1,8 +1,9 @@
 ## Laravel App Release Script
 
 ```shell
-.vendor/bin/releaser \
+./vendor/bin/releaser \
   --php-path="./vendor/bin/sail php" \
+  --composer-cmd="./vendor/bin/sail composer" \
   --remote-name=origin \
   --main-branch=main \
   --main-dev-branch=develop \

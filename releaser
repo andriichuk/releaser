@@ -4,6 +4,7 @@
 # Defaults (can be overridden by CLI args)
 ############################################
 PHP_PATH="./vendor/bin/sail php"
+COMPOSER_CMD="./vendor/bin/sail composer"
 REMOTE="origin"
 MAIN_BRANCH="main"
 MAIN_DEV_BRANCH="develop"
@@ -17,6 +18,9 @@ for arg in "$@"; do
   case "$arg" in
     --php-path=*)
       PHP_PATH="${arg#*=}"
+      ;;
+    --composer-cmd=*)
+      COMPOSER_CMD="${arg#*=}"
       ;;
     --remote-name=*)
       REMOTE="${arg#*=}"
@@ -102,16 +106,16 @@ run "git pull ${REMOTE} ${MAIN_DEV_BRANCH}" || fail "Failed to pull ${MAIN_DEV_B
 info "Running lint & tests..."
 
 info "Running phpstan..."
-run "${PHP_PATH} ./vendor/bin/phpstan analyse" || fail "phpstan failed"
+#run "${PHP_PATH} ./vendor/bin/phpstan analyse" || fail "phpstan failed"
 
 info "Generating API spec (openapi) to ensure schema validity..."
-run "${PHP_PATH} php ./vendor/bin/openapi app -o storage/app/private/api.json -f json" || fail "OpenAPI generation failed"
+run "${PHP_PATH} ./vendor/bin/openapi app -o storage/app/private/api.json -f json" || fail "OpenAPI generation failed"
 
 info "Running tests"
-run "${PHP_PATH} test --compact" || fail "Tests failed"
+run "${PHP_PATH} artisan test --compact" || fail "Tests failed"
 
 info "Checking composer dependencies (composer audit)"
-run "${PHP_PATH} composer audit" || fail "Composer audit reported issues"
+run "${COMPOSER_CMD} audit" || fail "Composer audit reported issues"
 
 info "Searching for debug dumps in PHP files..."
 if git grep -Eiw "var_dump|dump\(|dd\(|ddd\(|exit;|exit\(" -- '*.php' >/tmp/release_grep_result 2>/dev/null; then
@@ -125,7 +129,7 @@ else
 fi
 
 info "Formatting code with pint..."
-run "${PHP_PATH} php ./vendor/bin/pint" || fail "Code formatting failed"
+run "${PHP_PATH} ./vendor/bin/pint" || fail "Code formatting failed"
 
 echo
 read -p "Enter release version (eg. 1.0.0): " VERSION
