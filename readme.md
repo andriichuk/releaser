@@ -24,34 +24,38 @@ composer require andriichuk/releaser --dev
 
 ```shell
 ./vendor/bin/releaser \
-  --php-path="./vendor/bin/sail php" \
+  --php-cmd="./vendor/bin/sail php" \
   --composer-cmd="./vendor/bin/sail composer" \
-  --remote-name=origin \
+  --git-remote-name=origin \
   --main-branch=main \
   --main-dev-branch=develop \
   --release-branch-prefix="release/" \
-  --config-file="./config/app.php"
+  --with-tests=true \
+  --with-composer-audit=true \
+  --config-file="./config/app.php" \
+  --with-app-version-update=false
+  --post-release-update-branches=develop,stage
 ```
 
 <hr>
 
 ### Arguments
 
-`--php-path`
+`--php-cmd`
 
 Path to the PHP executable used for version updates.
 
 Examples:
  
-* Local PHP: `--php-path="php"`
-* Docker container: `--php-path="docker compose exec -T app php"`
-* Laravel Sail: `--php-path="./vendor/bin/sail php"`
+* Local PHP: `--php-cmd="php"`
+* Docker container: `--php-cmd="docker compose exec -T app php"`
+* Laravel Sail: `--php-cmd="./vendor/bin/sail php"`
 
 `--composer-cmd`
 
 <hr>
 
-`--remote-name`
+`--git-remote-name`
 
 Git remote name to push branches to.
 
