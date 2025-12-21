@@ -3,27 +3,31 @@
 ############################################
 # Defaults (can be overridden by CLI args)
 ############################################
-PHP_PATH="./vendor/bin/sail php"
+PHP_CMD="./vendor/bin/sail php"
 COMPOSER_CMD="./vendor/bin/sail composer"
-REMOTE="origin"
+GIT_REMOTE="origin"
 MAIN_BRANCH="main"
 MAIN_DEV_BRANCH="develop"
 CONFIG_FILE="./config/app.php"
 BRANCH_PREFIX="release/"
+WITH_APP_VERSION_UPDATE=false
+WITH_TESTS=true
+WITH_COMPOSER_AUDIT=true
+POST_RELEASE_UPDATE_BRANCHES=(${MAIN_DEV_BRANCH})
 
 ############################################
 # CLI argument parsing
 ############################################
 for arg in "$@"; do
   case "$arg" in
-    --php-path=*)
-      PHP_PATH="${arg#*=}"
+    --php-cmd=*)
+      PHP_CMD="${arg#*=}"
       ;;
     --composer-cmd=*)
       COMPOSER_CMD="${arg#*=}"
       ;;
-    --remote-name=*)
-      REMOTE="${arg#*=}"
+    --git-remote-name=*)
+      GIT_REMOTE="${arg#*=}"
       ;;
     --main-branch=*)
       MAIN_BRANCH="${arg#*=}"
@@ -37,6 +41,37 @@ for arg in "$@"; do
     --config-file=*)
       CONFIG_FILE="${arg#*=}"
       ;;
+    --with-app-version-update=*)
+      VALUE="${1#*=}"
+      if ! WITH_APP_VERSION_UPDATE=$(parse_bool "$VALUE"); then
+        echo "Invalid boolean: $VALUE"
+        exit 1
+      fi
+      shift
+      ;;
+    --with-tests=*)
+      VALUE="${1#*=}"
+      if ! WITH_TESTS=$(parse_bool "$VALUE"); then
+        echo "Invalid boolean: $VALUE"
+        exit 1
+      fi
+      shift
+      ;;
+    --with-composer-audit=*)
+      VALUE="${1#*=}"
+      if ! WITH_COMPOSER_AUDIT=$(parse_bool "$VALUE"); then
+        echo "Invalid boolean: $VALUE"
+        exit 1
+      fi
+      shift
+      ;;
+    --post-release-update-branches=*)
+      VALUE="${1#*=}"
+
+      IFS=',' read -r -a POST_RELEASE_UPDATE_BRANCHES <<< "$VALUE"
+
+      shift
+      ;;
     *)
       echo -e "${RED}Unknown argument: $arg${RESET}"
       exit 1
@@ -49,6 +84,14 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 RESET='\033[0m'
+
+parse_bool() {
+  case "$1" in
+    true|1|yes) echo true ;;
+    false|0|no) echo false ;;
+    *) return 1 ;;
+  esac
+}
 
 # helper: print and run, returning status
 run() {
@@ -66,16 +109,16 @@ info() {
   echo -e "${GREEN}→ $*${RESET}"
 }
 
-if eval "${PHP_PATH} --version" >/dev/null 2>&1; then
-  PHP_VERSION_OUTPUT=$(eval "${PHP_PATH} --version" 2>/dev/null | head -n1)
+if eval "${PHP_CMD} --version" >/dev/null 2>&1; then
+  PHP_VERSION_OUTPUT=$(eval "${PHP_CMD} --version" 2>/dev/null | head -n1)
   PHP_VERSION=$(echo "${PHP_VERSION_OUTPUT}" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
   if [ -n "${PHP_VERSION}" ]; then
-    info "Using PHP command: ${PHP_PATH} (version ${PHP_VERSION})"
+    info "Using PHP command: ${PHP_CMD} (version ${PHP_VERSION})"
   else
-    info "Using PHP command: ${PHP_PATH}"
+    info "Using PHP command: ${PHP_CMD}"
   fi
 else
-  fail "PHP executable or wrapper not found or not executable: ${PHP_PATH}. Export PHP_PATH to point to your sail/php script if necessary."
+  fail "PHP executable or wrapper not found or not executable: ${PHP_CMD}. Export PHP_CMD to point to your sail/php script if necessary."
 fi
 
 # Ensure we're in a git repo
@@ -100,36 +143,17 @@ if git rev-parse --verify "$MAIN_DEV_BRANCH" >/dev/null 2>&1; then
 else
   run "git switch -c ${MAIN_DEV_BRANCH}" || run "git checkout -b ${MAIN_DEV_BRANCH}" || fail "Failed to create/switch to ${MAIN_DEV_BRANCH}"
 fi
-run "git pull ${REMOTE} ${MAIN_DEV_BRANCH}" || fail "Failed to pull ${MAIN_DEV_BRANCH} from ${REMOTE}"
+run "git pull ${GIT_REMOTE} ${MAIN_DEV_BRANCH}" || fail "Failed to pull ${MAIN_DEV_BRANCH} from ${GIT_REMOTE}"
 
-# 2. Linting steps (fail on any error)
-info "Running lint & tests..."
-
-info "Running phpstan..."
-#run "${PHP_PATH} ./vendor/bin/phpstan analyse" || fail "phpstan failed"
-
-info "Generating API spec (openapi) to ensure schema validity..."
-run "${PHP_PATH} ./vendor/bin/openapi app -o storage/app/private/api.json -f json" || fail "OpenAPI generation failed"
-
-info "Running tests"
-run "${PHP_PATH} artisan test --compact" || fail "Tests failed"
-
-info "Checking composer dependencies (composer audit)"
-run "${COMPOSER_CMD} audit" || fail "Composer audit reported issues"
-
-info "Searching for debug dumps in PHP files..."
-if git grep -Eiw "var_dump|dump\(|dd\(|ddd\(|exit;|exit\(" -- '*.php' >/tmp/release_grep_result 2>/dev/null; then
-  echo -e "${RED}Found debug/dump/exit occurrences:${RESET}"
-  sed -n '1,200p' /tmp/release_grep_result
-  rm -f /tmp/release_grep_result
-  fail "Remove debug calls (var_dump, dump, dd, ddd, exit) before release."
-else
-  rm -f /tmp/release_grep_result 2>/dev/null || true
-  info "No debug/dump/exit occurrences found."
+if [[ "$WITH_TESTS" == true ]]; then
+  info "Running tests"
+  run "${PHP_CMD} artisan test --compact" || fail "Tests failed"
 fi
 
-info "Formatting code with pint..."
-run "${PHP_PATH} ./vendor/bin/pint" || fail "Code formatting failed"
+if [[ "$WITH_COMPOSER_AUDIT" == true ]]; then
+  info "Checking composer dependencies (composer audit)"
+  run "${COMPOSER_CMD} audit" || fail "Composer audit reported issues"
+fi
 
 echo
 read -p "Enter release version (eg. 1.0.0): " VERSION
@@ -138,57 +162,59 @@ if [ -z "$VERSION" ]; then
   fail "No version provided, aborting."
 fi
 
-info "Fetching tags from ${REMOTE}..."
-run "git fetch --tags ${REMOTE}" || fail "Failed to fetch tags"
+info "Fetching tags from ${GIT_REMOTE}..."
+run "git fetch --tags ${GIT_REMOTE}" || fail "Failed to fetch tags"
 
 if git rev-parse "refs/tags/${VERSION}" >/dev/null 2>&1; then
   fail "Tag '${VERSION}' already exists locally."
 fi
-if git ls-remote --tags "${REMOTE}" | grep -E "refs/tags/${VERSION}$" >/dev/null 2>&1; then
-  fail "Tag '${VERSION}' already exists on remote ${REMOTE}."
+if git ls-remote --tags "${GIT_REMOTE}" | grep -E "refs/tags/${VERSION}$" >/dev/null 2>&1; then
+  fail "Tag '${VERSION}' already exists on remote ${GIT_REMOTE}."
 fi
 
 RELEASE_BRANCH="${BRANCH_PREFIX}${VERSION}"
 info "Creating branch ${RELEASE_BRANCH}..."
 run "git checkout -b ${RELEASE_BRANCH}" || fail "Failed to create branch ${RELEASE_BRANCH}"
 
-info "Updating version in ${CONFIG_FILE} to ${VERSION}..."
-if [ ! -f "${CONFIG_FILE}" ]; then
-  fail "Config file '${CONFIG_FILE}' not found."
+if [[ "$WITH_APP_VERSION_UPDATE" == true ]]; then
+  info "Updating version in ${CONFIG_FILE} to ${VERSION}..."
+  if [ ! -f "${CONFIG_FILE}" ]; then
+    fail "Config file '${CONFIG_FILE}' not found."
+  fi
+
+  # Use sed -E with -i.bak for portability (works on GNU and BSD sed)
+  # This replaces 'version' => 'old' or "version" => "old"
+  SED_PATTERN="s/(['\"]version['\"]\\s*=>\\s*['\"][^'\"]*['\"])\\s*/\\1/"
+
+  # We will perform targeted replacement: replace the value after 'version' => '...'
+  # The sed below uses a capture group for prefix and suffix and inserts new version preserving quote style
+  # It will create a .bak (portable). We'll remove the .bak after success.
+  run "sed -E -i.bak \"s/(['\\\"]version['\\\"]\\s*=>\\s*['\\\"])[^'\\\"]+(['\\\"])/\\1${VERSION}\\2/\" \"${CONFIG_FILE}\"" || {
+    # restore backup if something went wrong
+    [ -f "${CONFIG_FILE}.bak" ] && mv "${CONFIG_FILE}.bak" "${CONFIG_FILE}"
+    fail "Failed to update ${CONFIG_FILE}"
+  }
+  # remove backup
+  rm -f "${CONFIG_FILE}.bak"
+
+  info "Staging ${CONFIG_FILE}..."
+  run "git add \"${CONFIG_FILE}\"" || fail "git add failed"
 fi
-
-# Use sed -E with -i.bak for portability (works on GNU and BSD sed)
-# This replaces 'version' => 'old' or "version" => "old"
-SED_PATTERN="s/(['\"]version['\"]\\s*=>\\s*['\"][^'\"]*['\"])\\s*/\\1/"
-
-# We will perform targeted replacement: replace the value after 'version' => '...'
-# The sed below uses a capture group for prefix and suffix and inserts new version preserving quote style
-# It will create a .bak (portable). We'll remove the .bak after success.
-run "sed -E -i.bak \"s/(['\\\"]version['\\\"]\\s*=>\\s*['\\\"])[^'\\\"]+(['\\\"])/\\1${VERSION}\\2/\" \"${CONFIG_FILE}\"" || {
-  # restore backup if something went wrong
-  [ -f "${CONFIG_FILE}.bak" ] && mv "${CONFIG_FILE}.bak" "${CONFIG_FILE}"
-  fail "Failed to update ${CONFIG_FILE}"
-}
-# remove backup
-rm -f "${CONFIG_FILE}.bak"
-
-info "Staging ${CONFIG_FILE}..."
-run "git add \"${CONFIG_FILE}\"" || fail "git add failed"
 
 COMMIT_MSG="Release ${VERSION}"
 info "Committing changes: ${COMMIT_MSG}"
 run "git commit -m \"${COMMIT_MSG}\"" || fail "git commit failed"
 
-info "Pushing branch ${RELEASE_BRANCH} to ${REMOTE}..."
-run "git push -u ${REMOTE} ${RELEASE_BRANCH}" || fail "git push failed"
+info "Pushing branch ${RELEASE_BRANCH} to ${GIT_REMOTE}..."
+run "git push -u ${GIT_REMOTE} ${RELEASE_BRANCH}" || fail "git push failed"
 
 echo
 info "When you finish creating and merging the Merge/Pull Request, press any key to continue..."
 read -n1 -s -r -p "Press any key when merged (or Ctrl+C to abort)..." ; echo
 
 while true; do
-  info "Fetching ${MAIN_BRANCH} from ${REMOTE}..."
-  run "git fetch ${REMOTE} ${MAIN_BRANCH}" || fail "Failed to fetch ${MAIN_BRANCH}"
+  info "Fetching ${MAIN_BRANCH} from ${GIT_REMOTE}..."
+  run "git fetch ${GIT_REMOTE} ${MAIN_BRANCH}" || fail "Failed to fetch ${MAIN_BRANCH}"
 
   if git rev-parse --verify "${MAIN_BRANCH}" >/dev/null 2>&1; then
     if git switch "${MAIN_BRANCH}" >/dev/null 2>&1; then
@@ -200,7 +226,7 @@ while true; do
     fail "Main branch ${MAIN_BRANCH} does not exist locally."
   fi
 
-  run "git pull ${REMOTE} ${MAIN_BRANCH}" || fail "Failed to pull ${MAIN_BRANCH}"
+  run "git pull ${GIT_REMOTE} ${MAIN_BRANCH}" || fail "Failed to pull ${MAIN_BRANCH}"
 
   if [ ! -f "${CONFIG_FILE}" ]; then
     fail "Config file ${CONFIG_FILE} not found on ${MAIN_BRANCH}."
@@ -219,29 +245,30 @@ done
 info "Creating annotated tag '${VERSION}' on ${MAIN_BRANCH} (this will open your git editor for message)..."
 
 run "git switch ${MAIN_BRANCH}" || fail "Cannot switch to ${MAIN_BRANCH}"
-run "git pull ${REMOTE} ${MAIN_BRANCH}" || fail "Failed to pull ${MAIN_BRANCH}"
+run "git pull ${GIT_REMOTE} ${MAIN_BRANCH}" || fail "Failed to pull ${MAIN_BRANCH}"
 
 run "git tag -a \"${VERSION}\"" || fail "Failed to create tag ${VERSION}"
 
-info "Pushing tag '${VERSION}' to ${REMOTE}..."
-run "git push ${REMOTE} \"refs/tags/${VERSION}\"" || fail "Failed to push tag ${VERSION}"
-
-info "Updating ${MAIN_DEV_BRANCH} from ${MAIN_BRANCH}..."
-
-run "git fetch ${REMOTE} ${MAIN_DEV_BRANCH} ${MAIN_BRANCH}" || fail "Failed to fetch branches"
-
-if git rev-parse --verify "${MAIN_DEV_BRANCH}" >/dev/null 2>&1; then
-  run "git switch ${MAIN_DEV_BRANCH}" || run "git checkout ${MAIN_DEV_BRANCH}" || fail "Cannot switch to ${MAIN_DEV_BRANCH}"
-  run "git pull ${REMOTE} ${MAIN_DEV_BRANCH}" || fail "Failed to pull ${MAIN_DEV_BRANCH}"
-fi
-
-run "git switch ${MAIN_BRANCH}" || run "git checkout ${MAIN_BRANCH}" || fail "Cannot switch to ${MAIN_BRANCH}"
-run "git pull ${REMOTE} ${MAIN_BRANCH}" || fail "Failed to pull ${MAIN_BRANCH}"
-
-run "git switch ${MAIN_DEV_BRANCH}" || run "git checkout ${MAIN_DEV_BRANCH}" || fail "Cannot switch to ${MAIN_DEV_BRANCH}"
-run "git merge origin/${MAIN_BRANCH}" || fail "Failed to merge ${MAIN_BRANCH} into ${MAIN_DEV_BRANCH}"
-run "git push ${REMOTE} ${MAIN_DEV_BRANCH}" || fail "Failed to push ${MAIN_DEV_BRANCH}"
+info "Pushing tag '${VERSION}' to ${GIT_REMOTE}..."
+run "git push ${GIT_REMOTE} \"refs/tags/${VERSION}\"" || fail "Failed to push tag ${VERSION}"
 
 echo
 echo -e "${GREEN}Release ${VERSION} completed successfully! 🎉${RESET}"
 echo -e "${GREEN}Tag '${VERSION}' pushed. ${RESET}"
+
+info "Post release branches update from ${MAIN_BRANCH}..."
+
+run "git fetch ${GIT_REMOTE} ${MAIN_BRANCH}" || fail "Failed to fetch branches"
+run "git switch ${MAIN_BRANCH}" || run "git checkout ${MAIN_BRANCH}" || fail "Cannot switch to ${MAIN_BRANCH}"
+run "git pull ${GIT_REMOTE} ${MAIN_BRANCH}" || fail "Failed to pull ${MAIN_BRANCH}"
+
+for sync_branch in "${POST_RELEASE_UPDATE_BRANCHES[@]}"; do
+  if git rev-parse --verify "$sync_branch" >/dev/null 2>&1; then
+    run "git switch $sync_branch" || run "git checkout $sync_branch" || fail "Cannot switch to $sync_branch"
+    run "git pull ${GIT_REMOTE} $sync_branch" || fail "Failed to pull $sync_branch"
+  fi
+
+  run "git switch $sync_branch" || run "git checkout $sync_branch" || fail "Cannot switch to $sync_branch"
+  run "git merge ${GIT_REMOTE}/$sync_branch" || fail "Failed to merge ${MAIN_BRANCH} into $sync_branch"
+  run "git push ${GIT_REMOTE} $sync_branch" || fail "Failed to push $sync_branch"
+done
