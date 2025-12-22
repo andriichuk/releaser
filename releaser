@@ -14,6 +14,7 @@ WITH_APP_VERSION_UPDATE=false
 WITH_TESTS=true
 WITH_COMPOSER_AUDIT=true
 POST_RELEASE_UPDATE_BRANCHES=("${MAIN_DEV_BRANCH}")
+COMMIT_MSG_TEMPLATE="Release v{{version}}"
 
 ############################################
 # CLI argument parsing
@@ -38,8 +39,8 @@ for arg in "$@"; do
     --release-branch-prefix=*)
       BRANCH_PREFIX="${arg#*=}"
       ;;
-    --config-file=*)
-      CONFIG_FILE="${arg#*=}"
+    --commit-msg-template=*)
+      COMMIT_MSG_TEMPLATE="${arg#*=}"
       ;;
     --with-app-version-update=*)
       VALUE="${1#*=}"
@@ -191,12 +192,16 @@ if [[ "$WITH_APP_VERSION_UPDATE" == true ]]; then
   run "git add \"${CONFIG_FILE}\"" || fail "git add failed"
 fi
 
-COMMIT_MSG="Release ${VERSION}"
-info "Committing changes: ${COMMIT_MSG}"
-run "git commit -m \"${COMMIT_MSG}\"" || fail "git commit failed"
+if ! git diff --quiet || ! git diff --staged --quiet; then
+  COMMIT_MSG="${COMMIT_MSG_TEMPLATE//\{\{version\}\}/${VERSION}}"
+  info "Committing changes: ${COMMIT_MSG}"
+  run "git commit -m \"${COMMIT_MSG}\"" || fail "git commit failed"
+fi
 
 info "Pushing branch ${RELEASE_BRANCH} to ${GIT_REMOTE}..."
 run "git push -u ${GIT_REMOTE} ${RELEASE_BRANCH}" || fail "git push failed"
+
+RELEASE_COMMIT=$(git rev-parse "${RELEASE_BRANCH}")
 
 echo
 info "When you finish creating and merging the Merge/Pull Request, press any key to continue..."
@@ -206,30 +211,18 @@ while true; do
   info "Fetching ${MAIN_BRANCH} from ${GIT_REMOTE}..."
   run "git fetch ${GIT_REMOTE} ${MAIN_BRANCH}" || fail "Failed to fetch ${MAIN_BRANCH}"
 
-  if git rev-parse --verify "${MAIN_BRANCH}" >/dev/null 2>&1; then
-    if git switch "${MAIN_BRANCH}" >/dev/null 2>&1; then
-      :
-    else
-      git checkout "${MAIN_BRANCH}" >/dev/null 2>&1 || fail "Failed to switch to ${MAIN_BRANCH}"
-    fi
-  else
-    fail "Main branch ${MAIN_BRANCH} does not exist locally."
-  fi
-
+  run "git switch ${MAIN_BRANCH}" || run "git checkout ${MAIN_BRANCH}" || fail "Cannot switch to ${MAIN_BRANCH}"
   run "git pull ${GIT_REMOTE} ${MAIN_BRANCH}" || fail "Failed to pull ${MAIN_BRANCH}"
 
-  if [ ! -f "${CONFIG_FILE}" ]; then
-    fail "Config file ${CONFIG_FILE} not found on ${MAIN_BRANCH}."
+  if git merge-base --is-ancestor "${RELEASE_COMMIT}" HEAD; then
+    info "Release branch '${RELEASE_BRANCH}' has been merged into ${MAIN_BRANCH}."
+    break
   fi
 
-  if grep -E "(['\"]version['\"]\\s*=>\\s*['\"])${VERSION}(['\"])" "${CONFIG_FILE}" >/dev/null 2>&1; then
-    info "Detected version ${VERSION} in ${CONFIG_FILE} on branch ${MAIN_BRANCH}."
-    break
-  else
-    echo
-    echo -e "${YELLOW}It seems ${CONFIG_FILE} on ${MAIN_BRANCH} does not contain version ${VERSION} yet.${RESET}"
-    read -p "Have you merged the MR? Press any key to re-check or Ctrl+C to abort..." -n1 -s ; echo
-  fi
+  echo
+  echo -e "${YELLOW}Release branch not merged into ${MAIN_BRANCH} yet.${RESET}"
+  read -p "Merge the MR/PR and press any key to re-check (Ctrl+C to abort)..." -n1 -s
+  echo
 done
 
 info "Creating annotated tag '${VERSION}' on ${MAIN_BRANCH} (this will open your git editor for message)..."
