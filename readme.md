@@ -2,6 +2,15 @@
 
 A small Bash-based release helper for PHP projects. It automates release branch creation, version updates, and post-release branch syncing using simple CLI arguments.
 
+* Switch to the main development branch and pull the latest changes
+* Optionally run tests and composer audit to ensure code quality
+* Ask for release version and create a release branch
+* Optionally update application version in `config/app.php`
+* Commit and push the release branch to the remote repository
+* Wait for the user merge the release branch via Pull/Merge Request (merge detected by checking the main branch for the release version in `config/app.php`)
+* Create a git tag for the new release version and push it to the remote repository
+* Merge the main branch into specified post-release branches to keep them up-to-date
+
 ### Requirements
 
 * Bash 
