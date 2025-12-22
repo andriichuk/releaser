@@ -2,15 +2,12 @@
 
 A small Bash-based release helper for PHP projects. It automates release branch creation, version updates, and post-release branch syncing using simple CLI arguments.
 
-<hr>
-
 ### Requirements
 
 * Bash 
 * Git 
 * PHP (local or containerized)
-
-<hr>
+* Composer (local or containerized)
 
 ### Installation
 
@@ -18,75 +15,34 @@ A small Bash-based release helper for PHP projects. It automates release branch 
 composer require andriichuk/releaser --dev
 ```
 
-<hr>
-
 ### Usage
 
 ```shell
 ./vendor/bin/releaser \
   --php-cmd="./vendor/bin/sail php" \
   --composer-cmd="./vendor/bin/sail composer" \
-  --git-remote-name=origin \
   --main-branch=main \
-  --main-dev-branch=develop \
-  --release-branch-prefix="release/" \
-  --with-tests=true \
-  --with-composer-audit=true \
-  --config-file="./config/app.php" \
-  --with-app-version-update=false
-  --post-release-update-branches=develop,stage
+  --main-dev-branch=develop
 ```
-
-<hr>
 
 ### Arguments
 
-`--php-cmd`
+| Argument                         | Default            | Description                                                                                                                             |
+|----------------------------------|--------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
+| `--php-cmd`                      | `php`              | PHP command or wrapper to execute (e.g. `php`, `./vendor/bin/sail php`, `docker exec -T app php`)                                       |
+| `--composer-cmd`                 | `composer`         | Composer command (e.g. `composer`, `./vendor/bin/sail composer`, `docker exec -T app composer`)                                         |
+| `--git-remote-name`              | `origin`           | Git remote name used for fetch, pull, and push                                                                                          |
+| `--main-branch`                  | `main`             | Primary production branch                                                                                                               |
+| `--main-dev-branch`              | `develop`          | Development branch used for ongoing work                                                                                                |
+| `--release-branch-prefix`        | `release/`         | Prefix for release branches                                                                                                             |
+| `--with-app-version-update`      | `false`            | Whether to update application version in `config/app.php` file. Please note that the file must exists and contain the `'version'` key.  |
+| `--post-release-update-branches` | `$main-dev-branch` | Comma-separated list of branches to update after release (e.g. `develop,stage`, by default value from `--main-dev-branch` will be used) |
+| `--with-tests`                   | `true`             | Whether to run tests before creating a release                                                                                          |
+| `--with-composer-audit`          | `true`             | Whether to run `composer audit` before creating a release                                                                               |
 
-Path to the PHP executable used for version updates.
+### TODO
 
-Examples:
- 
-* Local PHP: `--php-cmd="php"`
-* Docker container: `--php-cmd="docker compose exec -T app php"`
-* Laravel Sail: `--php-cmd="./vendor/bin/sail php"`
-
-`--composer-cmd`
-
-<hr>
-
-`--git-remote-name`
-
-Git remote name to push branches to.
-
-Default: `origin`
-
-<hr>
-
-`--main-branch`
-
-Main production branch (e.g., `main` or `master`), default `main`.
-
-<hr>
-
-`--main-dev-branch`
-
-Primary development branch where new features are merged, default `develop`.
-
-<hr>
-
-`--release-branch-prefix`
-
-Prefix for release branches, default `release/`. This will produce branches like: `release/1.0.0`.
-
-<hr>
-
-`--with-app-version-update`
-
-Whether to update the application version during release. Values: `true` or `false`. Default: `false`.
-
-<hr>
-
-`--post-release-update-branches`
-
-Comma-separated list of branches to sync with the main development branch after a release (e.g., `develop,stage`). By default, the main development branch is used.
+* Release notes generation based on commit messages
+* Main branch name detection
+* Template for release commit message
+* Linters (PHPStan, Dumps checker, Pint, Native PHP Linter, OpenAPI doc validation, JS production bundle generation, etc.)
