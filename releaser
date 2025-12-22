@@ -3,8 +3,8 @@
 ############################################
 # Defaults (can be overridden by CLI args)
 ############################################
-PHP_CMD="./vendor/bin/sail php"
-COMPOSER_CMD="./vendor/bin/sail composer"
+PHP_CMD="php"
+COMPOSER_CMD="composer"
 GIT_REMOTE="origin"
 MAIN_BRANCH="main"
 MAIN_DEV_BRANCH="develop"
@@ -13,7 +13,7 @@ BRANCH_PREFIX="release/"
 WITH_APP_VERSION_UPDATE=false
 WITH_TESTS=true
 WITH_COMPOSER_AUDIT=true
-POST_RELEASE_UPDATE_BRANCHES=(${MAIN_DEV_BRANCH})
+POST_RELEASE_UPDATE_BRANCHES=("${MAIN_DEV_BRANCH}")
 
 ############################################
 # CLI argument parsing
@@ -121,12 +121,10 @@ else
   fail "PHP executable or wrapper not found or not executable: ${PHP_CMD}. Export PHP_CMD to point to your sail/php script if necessary."
 fi
 
-# Ensure we're in a git repo
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   fail "Not inside a git repository."
 fi
 
-# ensure working tree clean
 if ! git diff --quiet || ! git diff --staged --quiet; then
   echo -e "${YELLOW}Warning: You have uncommitted changes. It's recommended to start from a clean working tree.${RESET}"
   read -p "Continue anyway? [y/N]: " cont
@@ -136,7 +134,6 @@ if ! git diff --quiet || ! git diff --staged --quiet; then
   esac
 fi
 
-# 1. checkout develop and pull latest
 info "Switching to ${MAIN_DEV_BRANCH} and pulling latest..."
 if git rev-parse --verify "$MAIN_DEV_BRANCH" >/dev/null 2>&1; then
   run "git checkout ${MAIN_DEV_BRANCH}" || fail "Cannot switch to ${MAIN_DEV_BRANCH}"
@@ -182,19 +179,12 @@ if [[ "$WITH_APP_VERSION_UPDATE" == true ]]; then
     fail "Config file '${CONFIG_FILE}' not found."
   fi
 
-  # Use sed -E with -i.bak for portability (works on GNU and BSD sed)
-  # This replaces 'version' => 'old' or "version" => "old"
-  SED_PATTERN="s/(['\"]version['\"]\\s*=>\\s*['\"][^'\"]*['\"])\\s*/\\1/"
-
-  # We will perform targeted replacement: replace the value after 'version' => '...'
-  # The sed below uses a capture group for prefix and suffix and inserts new version preserving quote style
-  # It will create a .bak (portable). We'll remove the .bak after success.
   run "sed -E -i.bak \"s/(['\\\"]version['\\\"]\\s*=>\\s*['\\\"])[^'\\\"]+(['\\\"])/\\1${VERSION}\\2/\" \"${CONFIG_FILE}\"" || {
     # restore backup if something went wrong
     [ -f "${CONFIG_FILE}.bak" ] && mv "${CONFIG_FILE}.bak" "${CONFIG_FILE}"
     fail "Failed to update ${CONFIG_FILE}"
   }
-  # remove backup
+
   rm -f "${CONFIG_FILE}.bak"
 
   info "Staging ${CONFIG_FILE}..."
