@@ -1,6 +1,6 @@
 ## PHP Project Release Flow Automation Script
 
-A small Bash-based release helper for PHP projects. It automates release branch creation, version updates, and post-release branch syncing using simple CLI arguments.
+A small Bash-based release helper for PHP projects. It automates release branch creation, version updates, and post-release branch syncing using simple CLI arguments. The script performs the following steps:
 
 * Switch to the main development branch and pull the latest changes
 * Optionally run tests and composer audit to ensure code quality
