@@ -36,22 +36,22 @@ composer require andriichuk/releaser --dev
 
 ### Arguments
 
-| Argument                         | Default            | Description                                                                                                                             |
-|----------------------------------|--------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
-| `--php-cmd`                      | `php`              | PHP command or wrapper to execute (e.g. `php`, `./vendor/bin/sail php`, `docker exec -T app php`)                                       |
-| `--composer-cmd`                 | `composer`         | Composer command (e.g. `composer`, `./vendor/bin/sail composer`, `docker exec -T app composer`)                                         |
-| `--git-remote-name`              | `origin`           | Git remote name used for fetch, pull, and push                                                                                          |
-| `--main-branch`                  | `main`             | Primary production branch                                                                                                               |
-| `--main-dev-branch`              | `develop`          | Development branch used for ongoing work                                                                                                |
-| `--release-branch-prefix`        | `release/`         | Prefix for release branches                                                                                                             |
-| `--with-app-version-update`      | `false`            | Whether to update application version in `config/app.php` file. Please note that the file must exists and contain the `'version'` key.  |
-| `--post-release-update-branches` | `$main-dev-branch` | Comma-separated list of branches to update after release (e.g. `develop,stage`, by default value from `--main-dev-branch` will be used) |
-| `--with-tests`                   | `true`             | Whether to run tests before creating a release                                                                                          |
-| `--with-composer-audit`          | `true`             | Whether to run `composer audit` before creating a release                                                                               |
+| Argument                         | Default                | Description                                                                                                                             |
+|----------------------------------|------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
+| `--php-cmd`                      | `php`                  | PHP command or wrapper to execute (e.g. `php`, `./vendor/bin/sail php`, `docker exec -T app php`)                                       |
+| `--composer-cmd`                 | `composer`             | Composer command (e.g. `composer`, `./vendor/bin/sail composer`, `docker exec -T app composer`)                                         |
+| `--git-remote-name`              | `origin`               | Git remote name used for fetch, pull, and push                                                                                          |
+| `--main-branch`                  | `main`                 | Primary production branch                                                                                                               |
+| `--main-dev-branch`              | `develop`              | Development branch used for ongoing work                                                                                                |
+| `--release-branch-prefix`        | `release/`             | Prefix for release branches                                                                                                             |
+| `--with-app-version-update`      | `false`                | Whether to update application version in `config/app.php` file. Please note that the file must exists and contain the `'version'` key.  |
+| `--post-release-update-branches` | `$main-dev-branch`     | Comma-separated list of branches to update after release (e.g. `develop,stage`, by default value from `--main-dev-branch` will be used) |
+| `--with-tests`                   | `true`                 | Whether to run tests before creating a release                                                                                          |
+| `--with-composer-audit`          | `true`                 | Whether to run `composer audit` before creating a release                                                                               |
+| `--commit-msg-template`          | `Release v{{version}}` | Template for the commit message after making any changes in the release branch (only `{{version}` placeholder supported)                |
 
 ### TODO
 
 * Release notes generation based on commit messages
 * Main branch name detection
-* Template for release commit message
 * Linters (PHPStan, Dumps checker, Pint, Native PHP Linter, OpenAPI doc validation, JS production bundle generation, etc.)
