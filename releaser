@@ -16,6 +16,14 @@ WITH_COMPOSER_AUDIT=true
 POST_RELEASE_UPDATE_BRANCHES=("${MAIN_DEV_BRANCH}")
 COMMIT_MSG_TEMPLATE="Release v{{version}}"
 
+parse_bool() {
+  case "$1" in
+    true|1|yes) echo true ;;
+    false|0|no) echo false ;;
+    *) return 1 ;;
+  esac
+}
+
 ############################################
 # CLI argument parsing
 ############################################
@@ -43,15 +51,15 @@ for arg in "$@"; do
       COMMIT_MSG_TEMPLATE="${arg#*=}"
       ;;
     --with-app-version-update=*)
-      VALUE="${1#*=}"
+      VALUE="${arg#*=}"
       if ! WITH_APP_VERSION_UPDATE=$(parse_bool "$VALUE"); then
-        echo "Invalid boolean: $VALUE"
+        echo "Invalid boolean: ${arg#*=}"
         exit 1
       fi
       shift
       ;;
     --with-tests=*)
-      VALUE="${1#*=}"
+      VALUE="${arg#*=}"
       if ! WITH_TESTS=$(parse_bool "$VALUE"); then
         echo "Invalid boolean: $VALUE"
         exit 1
@@ -59,7 +67,7 @@ for arg in "$@"; do
       shift
       ;;
     --with-composer-audit=*)
-      VALUE="${1#*=}"
+      VALUE="${arg#*=}"
       if ! WITH_COMPOSER_AUDIT=$(parse_bool "$VALUE"); then
         echo "Invalid boolean: $VALUE"
         exit 1
@@ -67,7 +75,7 @@ for arg in "$@"; do
       shift
       ;;
     --post-release-update-branches=*)
-      VALUE="${1#*=}"
+      VALUE="${arg#*=}"
 
       IFS=',' read -r -a POST_RELEASE_UPDATE_BRANCHES <<< "$VALUE"
 
@@ -85,14 +93,6 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 RESET='\033[0m'
-
-parse_bool() {
-  case "$1" in
-    true|1|yes) echo true ;;
-    false|0|no) echo false ;;
-    *) return 1 ;;
-  esac
-}
 
 # helper: print and run, returning status
 run() {
@@ -195,7 +195,7 @@ fi
 if ! git diff --quiet || ! git diff --staged --quiet; then
   COMMIT_MSG="${COMMIT_MSG_TEMPLATE//\{\{version\}\}/${VERSION}}"
   info "Committing changes: ${COMMIT_MSG}"
-  run "git commit -m \"${COMMIT_MSG}\"" || fail "git commit failed"
+  run "git commit -m \"${COMMIT_MSG}\" --no-verify" || fail "git commit failed"
 fi
 
 info "Pushing branch ${RELEASE_BRANCH} to ${GIT_REMOTE}..."
@@ -230,7 +230,36 @@ info "Creating annotated tag '${VERSION}' on ${MAIN_BRANCH} (this will open your
 run "git switch ${MAIN_BRANCH}" || fail "Cannot switch to ${MAIN_BRANCH}"
 run "git pull ${GIT_REMOTE} ${MAIN_BRANCH}" || fail "Failed to pull ${MAIN_BRANCH}"
 
-run "git tag -a \"${VERSION}\"" || fail "Failed to create tag ${VERSION}"
+CHANGELOG=$(git log "${FROM_REF}..${TO_REF}" \
+  --pretty=format:'%h | %s' \
+  --no-merges \
+  --reverse \
+| awk '
+  {
+    key="NO_TICKET_" NR
+    if (match($0, /\[[A-Z]+-[0-9]+\]/)) {
+      key=substr($0, RSTART+1, RLENGTH-2)
+    }
+    if (!(key in seen)) {
+      seen[key]=1
+      print "- " $0
+    }
+  }
+')
+
+TMP_TAG_DESC=$(mktemp)
+
+{
+  echo "Release ${VERSION}"
+  echo
+  echo "Changes:"
+  echo
+  echo "${CHANGELOG}"
+} > "${TMP_TAG_DESC}"
+
+run "git tag -a \"${VERSION}\" -F \"${TMP_TAG_DESC}\"" || fail "Failed to create tag ${VERSION}"
+
+rm -f "${TMP_TAG_DESC}"
 
 info "Pushing tag '${VERSION}' to ${GIT_REMOTE}..."
 run "git push ${GIT_REMOTE} \"refs/tags/${VERSION}\"" || fail "Failed to push tag ${VERSION}"
