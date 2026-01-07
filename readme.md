@@ -54,4 +54,5 @@ composer require andriichuk/releaser --dev
 
 * Release notes generation based on commit messages
 * Main branch name detection
+* Latest version detection based on git tags or `config/app.php` file
 * Linters (PHPStan, Dumps checker, Pint, Native PHP Linter, OpenAPI doc validation, JS production bundle generation, etc.)
