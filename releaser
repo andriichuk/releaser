@@ -230,22 +230,30 @@ info "Creating annotated tag '${VERSION}' on ${MAIN_BRANCH} (this will open your
 run "git switch ${MAIN_BRANCH}" || fail "Cannot switch to ${MAIN_BRANCH}"
 run "git pull ${GIT_REMOTE} ${MAIN_BRANCH}" || fail "Failed to pull ${MAIN_BRANCH}"
 
-CHANGELOG=$(git log "${FROM_REF}..${TO_REF}" \
-  --pretty=format:'%h | %s' \
+FROM_REF="${GIT_REMOTE}/${MAIN_BRANCH}"
+TO_REF="${GIT_REMOTE}/${RELEASE_BRANCH}"
+
+CHANGELOG=$(git log \
+  --pretty=format:'%h | %an | %ad | %s' \
+  --date=short \
   --no-merges \
   --reverse \
+  "${FROM_REF}..${TO_REF}" \
 | awk '
   {
-    key="NO_TICKET_" NR
+    key = "NO_TICKET_" NR
+
     if (match($0, /\[[A-Z]+-[0-9]+\]/)) {
-      key=substr($0, RSTART+1, RLENGTH-2)
+      key = substr($0, RSTART+1, RLENGTH-2)
     }
+
     if (!(key in seen)) {
-      seen[key]=1
+      seen[key] = 1
       print "- " $0
     }
   }
 ')
+
 
 TMP_TAG_DESC=$(mktemp)
 
@@ -281,6 +289,6 @@ for sync_branch in "${POST_RELEASE_UPDATE_BRANCHES[@]}"; do
   fi
 
   run "git switch $sync_branch" || run "git checkout $sync_branch" || fail "Cannot switch to $sync_branch"
-  run "git merge ${GIT_REMOTE}/$sync_branch" || fail "Failed to merge ${MAIN_BRANCH} into $sync_branch"
+  run "git merge ${GIT_REMOTE}/${MAIN_BRANCH}" || fail "Failed to merge ${MAIN_BRANCH} into $sync_branch"
   run "git push ${GIT_REMOTE} $sync_branch" || fail "Failed to push $sync_branch"
 done
