@@ -24,11 +24,33 @@ parse_bool() {
   esac
 }
 
+usage() {
+  printf 'Usage: %s [OPTIONS]\n' "${0##*/}"
+  printf '\nRelease flow: switch to dev branch, pull, optional checks, create release branch, push, tag.\n'
+  printf '\nOptions:\n'
+  printf '  --php-cmd=CMD              PHP command (default: php)\n'
+  printf '  --composer-cmd=CMD         Composer command (default: composer)\n'
+  printf '  --git-remote-name=NAME     Git remote (default: origin)\n'
+  printf '  --main-branch=BRANCH       Production branch (default: main)\n'
+  printf '  --main-dev-branch=BRANCH   Development branch (default: develop)\n'
+  printf '  --release-branch-prefix=PREFIX  Release branch prefix (default: release/)\n'
+  printf '  --commit-msg-template=TMPL Commit message template, {{version}} placeholder (default: Release v{{version}})\n'
+  printf '  --with-app-version-update=BOOL  Update version in config/app.php (default: false)\n'
+  printf '  --with-tests=BOOL          Run tests before release (default: true)\n'
+  printf '  --with-composer-audit=BOOL Run composer audit before release (default: true)\n'
+  printf '  --post-release-update-branches=BRANCHES  Comma-separated branches to update after release (default: main-dev-branch)\n'
+  printf '  --help                     Show this help\n'
+}
+
 ############################################
 # CLI argument parsing
 ############################################
 for arg in "$@"; do
   case "$arg" in
+    --help|-h)
+      usage
+      exit 0
+      ;;
     --php-cmd=*)
       PHP_CMD="${arg#*=}"
       ;;
@@ -163,11 +185,39 @@ fi
 info "Fetching tags from ${GIT_REMOTE}..."
 run "git fetch --tags ${GIT_REMOTE}" || fail "Failed to fetch tags"
 
+TAG_EXISTS_LOCALLY=false
+TAG_EXISTS_REMOTE=false
 if git rev-parse "refs/tags/${VERSION}" >/dev/null 2>&1; then
-  fail "Tag '${VERSION}' already exists locally."
+  TAG_EXISTS_LOCALLY=true
 fi
 if git ls-remote --tags "${GIT_REMOTE}" | grep -E "refs/tags/${VERSION}$" >/dev/null 2>&1; then
-  fail "Tag '${VERSION}' already exists on remote ${GIT_REMOTE}."
+  TAG_EXISTS_REMOTE=true
+fi
+
+if [[ "$TAG_EXISTS_LOCALLY" == true || "$TAG_EXISTS_REMOTE" == true ]]; then
+  echo -e "${YELLOW}Tag '${VERSION}' already exists${RESET}"
+  [[ "$TAG_EXISTS_LOCALLY" == true ]] && echo "  - locally"
+  [[ "$TAG_EXISTS_REMOTE" == true ]] && echo "  - on remote ${GIT_REMOTE}"
+  echo
+  read -p "Delete the tag and continue (d), or abort (a)? [d/A]: " tag_choice
+  case "$tag_choice" in
+    [Aa]*)
+      fail "Aborting release."
+      ;;
+    [Dd]*)
+      if [[ "$TAG_EXISTS_LOCALLY" == true ]]; then
+        info "Deleting local tag '${VERSION}'..."
+        run "git tag -d \"${VERSION}\"" || fail "Failed to delete local tag"
+      fi
+      if [[ "$TAG_EXISTS_REMOTE" == true ]]; then
+        info "Deleting remote tag '${VERSION}' on ${GIT_REMOTE}..."
+        run "git push ${GIT_REMOTE} :refs/tags/${VERSION}" || fail "Failed to delete remote tag"
+      fi
+      ;;
+    *)
+      fail "Aborting release."
+      ;;
+  esac
 fi
 
 RELEASE_BRANCH="${BRANCH_PREFIX}${VERSION}"
@@ -230,8 +280,16 @@ info "Creating annotated tag '${VERSION}' on ${MAIN_BRANCH} (this will open your
 run "git switch ${MAIN_BRANCH}" || fail "Cannot switch to ${MAIN_BRANCH}"
 run "git pull ${GIT_REMOTE} ${MAIN_BRANCH}" || fail "Failed to pull ${MAIN_BRANCH}"
 
-FROM_REF="${GIT_REMOTE}/${MAIN_BRANCH}"
-TO_REF="${GIT_REMOTE}/${RELEASE_BRANCH}"
+# Changelog: commits that are in this release (merged into main).
+# Use merge commit parents so we get release branch commits; origin/main..origin/release/X
+# would be empty after the merge because main already contains the release.
+if git rev-parse HEAD^2 >/dev/null 2>&1; then
+  FROM_REF="HEAD^1"
+  TO_REF="HEAD^2"
+else
+  FROM_REF="HEAD^1"
+  TO_REF="HEAD"
+fi
 
 CHANGELOG=$(git log \
   --pretty=format:'%h | %an | %ad | %s' \

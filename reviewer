@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+set -e
+
+############################################
+# Defaults (can be overridden by CLI args)
+############################################
+PHP_CMD="php"
+COMPOSER_CMD="composer"
+WITH_PINT=true
+WITH_DUMPS_CHECK=true
+WITH_PHP_LINT=true
+WITH_PHPSTAN=true
+WITH_TESTS=true
+WITH_COMPOSER_AUDIT=true
+WITH_API_SPEC=true
+
+parse_bool() {
+  case "$1" in
+    true|1|yes) echo true ;;
+    false|0|no) echo false ;;
+    *) return 1 ;;
+  esac
+}
+
+usage() {
+  printf 'Usage: %s [OPTIONS]\n' "${0##*/}"
+  printf '\nPre-commit checks: Pint, dumps, lint, PHPStan, tests, API spec, Composer audit.\n'
+  printf '\nOptions:\n'
+  printf '  --php-cmd=CMD           PHP command (default: php)\n'
+  printf '  --composer-cmd=CMD      Composer command (default: composer)\n'
+  printf '  --with-pint=BOOL        Run Pint on staged PHP files (default: true)\n'
+  printf '  --with-dumps-check=BOOL Check for dump/exit in staged files (default: true)\n'
+  printf '  --with-php-lint=BOOL    Run php -l on staged files (default: true)\n'
+  printf '  --with-phpstan=BOOL    Run PHPStan on staged files (default: true)\n'
+  printf '  --with-tests=BOOL       Run test suite (default: true)\n'
+  printf '  --with-composer-audit=BOOL  Run composer audit (default: true)\n'
+  printf '  --with-api-spec=BOOL    Generate OpenAPI spec (default: true)\n'
+  printf '  --help                  Show this help\n'
+}
+
+############################################
+# CLI argument parsing
+############################################
+for arg in "$@"; do
+  case "$arg" in
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --php-cmd=*)
+      PHP_CMD="${arg#*=}"
+      ;;
+    --composer-cmd=*)
+      COMPOSER_CMD="${arg#*=}"
+      ;;
+    --with-pint=*)
+      VALUE="${arg#*=}"
+      if ! WITH_PINT=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE"
+        exit 1
+      fi
+      ;;
+    --with-dumps-check=*)
+      VALUE="${arg#*=}"
+      if ! WITH_DUMPS_CHECK=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE"
+        exit 1
+      fi
+      ;;
+    --with-php-lint=*)
+      VALUE="${arg#*=}"
+      if ! WITH_PHP_LINT=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE"
+        exit 1
+      fi
+      ;;
+    --with-phpstan=*)
+      VALUE="${arg#*=}"
+      if ! WITH_PHPSTAN=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE"
+        exit 1
+      fi
+      ;;
+    --with-tests=*)
+      VALUE="${arg#*=}"
+      if ! WITH_TESTS=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE"
+        exit 1
+      fi
+      ;;
+    --with-composer-audit=*)
+      VALUE="${arg#*=}"
+      if ! WITH_COMPOSER_AUDIT=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE"
+        exit 1
+      fi
+      ;;
+    --with-api-spec=*)
+      VALUE="${arg#*=}"
+      if ! WITH_API_SPEC=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE"
+        exit 1
+      fi
+      ;;
+    *)
+      printf '\033[0;31mUnknown argument: %s\033[0m\n' "$arg"
+      exit 1
+      ;;
+  esac
+done
+
+# Staged PHP files as array (safe for spaces in paths)
+staged_files=()
+while IFS= read -r -d '' f; do
+  staged_files+=("$f")
+done < <(git diff --cached --name-only -z --diff-filter=ACMR | grep -z '\.php$' || true)
+
+if [[ "$WITH_PINT" == true && ${#staged_files[@]} -gt 0 ]]; then
+  cmd=($PHP_CMD ./vendor/bin/pint "${staged_files[@]}")
+  "${cmd[@]}"
+  git add "${staged_files[@]}"
+fi
+
+if [[ "$WITH_DUMPS_CHECK" == true ]]; then
+  printf '\033[44mChecking PHP var_dump...\033[0m\n'
+  dumps=""
+  if ((${#staged_files[@]} > 0)); then
+    dumps=$(git grep -Eiw "var_dump|dump\(|dd\(|ddd\(|exit;|exit\(" -- '*.php' "${staged_files[@]}" 2>/dev/null || true)
+  fi
+  if [ -n "$dumps" ]; then
+    printf '\033[101mYou\'ve left a dump function in one of your files! Aborting commit.\033[0m\n'
+    echo "$dumps"
+    exit 1
+  fi
+fi
+
+if [[ "$WITH_PHP_LINT" == true && ${#staged_files[@]} -gt 0 ]]; then
+  printf '\033[44mChecking PHP Lint...\033[0m\n'
+  for f in "${staged_files[@]}"; do
+    cmd=($PHP_CMD -l -d display_errors=0 -- "$f")
+    "${cmd[@]}" || {
+      printf '\033[101mFix the error before commit.\033[0m\n'
+      exit 1
+    }
+  done
+fi
+
+if [[ "$WITH_PHPSTAN" == true && ${#staged_files[@]} -gt 0 ]]; then
+  printf '\033[44mChecking PHPStan...\033[0m\n'
+  cmd=($PHP_CMD ./vendor/bin/phpstan analyse "${staged_files[@]}")
+  "${cmd[@]}"
+fi
+
+if [[ "$WITH_TESTS" == true ]]; then
+  printf '\033[44mRunning tests...\033[0m\n'
+  cmd=($PHP_CMD artisan test --compact)
+  "${cmd[@]}"
+fi
+
+if [[ "$WITH_API_SPEC" == true ]]; then
+  printf '\033[44mGenerating API Spec ...\033[0m\n'
+  cmd=($PHP_CMD ./vendor/bin/openapi app -o storage/app/private/api.json -f json)
+  "${cmd[@]}"
+fi
+
+if [[ "$WITH_COMPOSER_AUDIT" == true ]]; then
+  printf '\033[44mChecking Composer Dependencies...\033[0m\n'
+  cmd=($COMPOSER_CMD audit)
+  "${cmd[@]}"
+fi

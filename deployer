@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+set -e
+
+############################################
+# Defaults (can be overridden by CLI args)
+############################################
+PHP_CMD=php
+WITH_MAINTENANCE=false
+WITH_MIGRATE=true
+WITH_STORAGE_LINK=true
+WITH_FILAMENT_OPTIMIZE=true
+WITH_HORIZON_TERMINATE=true
+WITH_API_SPEC=false
+WITH_LIVEWIRE_ASSETS=false
+WITH_ROUTE_CACHE=true
+WITH_EVENT_CACHE=true
+
+parse_bool() {
+  case "$1" in
+    true|1|yes) echo true ;;
+    false|0|no) echo false ;;
+    *) return 1 ;;
+  esac
+}
+
+usage() {
+  printf 'Usage: %s [OPTIONS]\n' "${0##*/}"
+  printf '\nLaravel deployment: clear caches, optimize, migrate, optional steps.\n'
+  printf '\nOptions:\n'
+  printf '  --php=BINARY              PHP binary (default: php)\n'
+  printf '  --with-maintenance=BOOL  Run artisan down before deploy and artisan up after (default: false)\n'
+  printf '  --with-migrate=BOOL      Run migrations (default: true)\n'
+  printf '  --with-storage-link=BOOL Create storage link (default: true)\n'
+  printf '  --with-filament-optimize=BOOL  Run filament:optimize (default: true)\n'
+  printf '  --with-horizon-terminate=BOOL  Run horizon:terminate (default: true)\n'
+  printf '  --with-api-spec=BOOL     Generate OpenAPI spec to storage/app/private/api.json (default: false)\n'
+  printf '  --with-livewire-assets=BOOL  Publish Livewire static assets (default: false)\n'
+  printf '  --with-route-cache=BOOL  Run route:cache (disable if using closure routes) (default: true)\n'
+  printf '  --with-event-cache=BOOL  Run event:cache (default: true)\n'
+  printf '  --help                   Show this help\n'
+}
+
+run_artisan() {
+  "$PHP_CMD" artisan "$@"
+}
+
+############################################
+# CLI argument parsing
+############################################
+for arg in "$@"; do
+  case "$arg" in
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --php=*)
+      PHP_CMD="${arg#*=}"
+      [[ -n "$PHP_CMD" ]] || { printf '\033[0;31m--php= requires a non-empty value\033[0m\n' >&2; exit 1; }
+      ;;
+    --with-maintenance=*)
+      VALUE="${arg#*=}"
+      if ! WITH_MAINTENANCE=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --with-migrate=*)
+      VALUE="${arg#*=}"
+      if ! WITH_MIGRATE=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --with-storage-link=*)
+      VALUE="${arg#*=}"
+      if ! WITH_STORAGE_LINK=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --with-filament-optimize=*)
+      VALUE="${arg#*=}"
+      if ! WITH_FILAMENT_OPTIMIZE=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --with-horizon-terminate=*)
+      VALUE="${arg#*=}"
+      if ! WITH_HORIZON_TERMINATE=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --with-api-spec=*)
+      VALUE="${arg#*=}"
+      if ! WITH_API_SPEC=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --with-livewire-assets=*)
+      VALUE="${arg#*=}"
+      if ! WITH_LIVEWIRE_ASSETS=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --with-route-cache=*)
+      VALUE="${arg#*=}"
+      if ! WITH_ROUTE_CACHE=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --with-event-cache=*)
+      VALUE="${arg#*=}"
+      if ! WITH_EVENT_CACHE=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    *)
+      printf '\033[0;31mUnknown argument: %s\033[0m\n' "$arg" >&2
+      exit 1
+      ;;
+  esac
+done
+
+############################################
+# Deployment steps
+############################################
+if [[ ! -f artisan ]]; then
+  printf '\033[0;31mRun from project root (directory containing artisan).\033[0m\n' >&2
+  exit 1
+fi
+
+if [[ "$WITH_MAINTENANCE" == true ]]; then
+  printf '\033[44mMaintenance: down...\033[0m\n'
+  run_artisan down
+fi
+
+printf '\033[44mClearing caches...\033[0m\n'
+run_artisan optimize:clear
+
+printf '\033[44mCaching views, config, routes, events...\033[0m\n'
+run_artisan view:cache
+run_artisan config:cache
+if [[ "$WITH_ROUTE_CACHE" == true ]]; then
+  run_artisan route:cache
+fi
+if [[ "$WITH_EVENT_CACHE" == true ]]; then
+  run_artisan event:cache
+fi
+
+if [[ "$WITH_FILAMENT_OPTIMIZE" == true ]]; then
+  printf '\033[44mFilament optimize...\033[0m\n'
+  run_artisan filament:optimize
+fi
+
+printf '\033[44mOptimizing...\033[0m\n'
+run_artisan optimize
+
+if [[ "$WITH_LIVEWIRE_ASSETS" == true ]]; then
+  printf '\033[44mPublishing Livewire assets...\033[0m\n'
+  run_artisan vendor:publish --force --tag=livewire:assets
+fi
+
+if [[ "$WITH_API_SPEC" == true ]]; then
+  printf '\033[44mGenerating API spec...\033[0m\n'
+  "$PHP_CMD" ./vendor/bin/openapi app -o storage/app/private/api.json -f json
+fi
+
+if [[ "$WITH_MIGRATE" == true ]]; then
+  printf '\033[44mRunning migrations...\033[0m\n'
+  run_artisan migrate --force
+fi
+
+if [[ "$WITH_STORAGE_LINK" == true ]]; then
+  printf '\033[44mStorage link...\033[0m\n'
+  run_artisan storage:link
+fi
+
+if [[ "$WITH_MAINTENANCE" == true ]]; then
+  printf '\033[44mMaintenance: up...\033[0m\n'
+  run_artisan up
+fi
+
+if [[ "$WITH_HORIZON_TERMINATE" == true ]]; then
+  printf '\033[44mTerminating Horizon...\033[0m\n'
+  run_artisan horizon:terminate
+fi
