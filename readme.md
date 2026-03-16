@@ -1,32 +1,46 @@
-## PHP Project Release Flow Automation Script
+## PHP Project Release, Code Review & Deployment Automation
 
-A small Bash-based release helper for PHP projects. It automates release branch creation, version updates, and post-release branch syncing using simple CLI arguments. The script performs the following steps:
+A small Bash-based toolkit for PHP projects with three scripts: **Releaser** (release flow), **Reviewer** (code review, pre-commit), and **Deployer** (server-side deployment). Requirements and installation are shared; each section below documents one script.
+
+### Requirements
+
+* Bash
+* Git
+* PHP (local or containerized)
+* Composer (local or containerized)
+
+### Installation
+
+**Releaser and Reviewer** (local / CI only):
+
+```shell
+composer require andriichuk/releaser --dev
+```
+
+**Deployer** (run on the server after deploy): install without `--dev` so the package is available in production (e.g. in your deployment recipe or server `composer install`):
+
+```shell
+composer require andriichuk/releaser
+```
+
+---
+
+## Releaser
+
+The `releaser` script automates release branch creation, version updates, and post-release branch syncing using simple CLI arguments. The following steps are executed automatically by the script:
+
+**Steps:**
 
 * Switch to the main development branch and pull the latest changes
 * Optionally run tests and composer audit to ensure code quality
 * Ask for release version and create a release branch
 * Optionally update application version in `config/app.php`
 * Commit and push the release branch to the remote repository
-* Wait for the user merge the release branch via Pull/Merge Request (merge detected by checking the main branch for the release version in `config/app.php`)
+* Wait for the user to merge the release branch via Pull/Merge Request (merge detected by checking the main branch for the release version in `config/app.php`)
 * Create a git tag for the new release version and push it to the remote repository
 * Merge the main branch into specified post-release branches to keep them up-to-date
 
-For pre-commit checks (Pint, dumps, lint, PHPStan, tests, API spec, Composer audit), see [Reviewer (pre-commit hook)](#reviewer-pre-commit-hook). For server-side Laravel deployment steps (caches, optimize, migrate, etc.), see [Deployer](#deployer).
-
-### Requirements
-
-* Bash 
-* Git 
-* PHP (local or containerized)
-* Composer (local or containerized)
-
-### Installation
-
-```shell
-composer require andriichuk/releaser --dev
-```
-
-### Usage
+**Usage**
 
 ```shell
 ./vendor/bin/releaser \
@@ -36,7 +50,7 @@ composer require andriichuk/releaser --dev
   --main-dev-branch=develop
 ```
 
-### Arguments
+**Arguments**
 
 | Argument                         | Default                | Description                                                                                                                             |
 |----------------------------------|------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
@@ -50,9 +64,11 @@ composer require andriichuk/releaser --dev
 | `--post-release-update-branches` | `$main-dev-branch`     | Comma-separated list of branches to update after release (e.g. `develop,stage`, by default value from `--main-dev-branch` will be used) |
 | `--with-tests`                   | `true`                 | Whether to run tests before creating a release                                                                                          |
 | `--with-composer-audit`          | `true`                 | Whether to run `composer audit` before creating a release                                                                               |
-| `--commit-msg-template`          | `Release v{{version}}` | Template for the commit message after making any changes in the release branch (only `{{version}` placeholder supported)                |
+| `--commit-msg-template`          | `Release v{{version}}` | Template for the commit message after making any changes in the release branch (only `{{version}}` placeholder supported)                |
 
-### Reviewer (pre-commit hook)
+---
+
+## Reviewer (pre-commit hook)
 
 The `reviewer` script runs checks on staged PHP files and the project before commit. It is intended to be used as a Git pre-commit hook or run manually. It requires Laravel Sail (or equivalent) for running commands.
 
@@ -63,25 +79,41 @@ The `reviewer` script runs checks on staged PHP files and the project before com
 * **PHP lint** — Run `php -l` on each staged PHP file
 * **PHPStan** — Static analysis on staged PHP files
 * **Tests** — Run `sail test --compact`
-* **API spec** — Generate OpenAPI spec to `storage/app/private/api.json`
+* **API spec** — Generate OpenAPI spec to `storage/app/private/api.json` (via the project's `vendor/bin/openapi` CLI)
 * **Composer audit** — Run `composer audit`
 
-**Usage**
+**Usage (Reviewer)**
+
+**1. Run manually with full control over options** — Use this when running the reviewer from the terminal. You can pass any combination of `--php-cmd`, `--composer-cmd`, `--with-tests`, `--with-api-spec`, etc.
 
 ```shell
-# Run all checks (defaults)
+# All checks (defaults)
 ./vendor/bin/reviewer
 
 # With Laravel Sail
 ./vendor/bin/reviewer --php-cmd="./vendor/bin/sail php" --composer-cmd="./vendor/bin/sail composer"
 
-# As Git pre-commit hook (from repo root)
-ln -sf ../../vendor/bin/reviewer .git/hooks/pre-commit
-# or copy and invoke with options:
-# .git/hooks/pre-commit:  exec ./vendor/bin/reviewer --with-tests=false
+# Custom options (e.g. skip tests and API spec)
+./vendor/bin/reviewer --with-tests=false --with-api-spec=false
 ```
 
-**Arguments**
+**2. Pre-commit hook via symlink** — From the project root, create a symlink so `.git/hooks/pre-commit` points at the vendor script. The hook always runs the script with its default options; no wrapper file to maintain.
+
+```shell
+ln -sf ../../vendor/bin/reviewer .git/hooks/pre-commit
+```
+
+**3. Pre-commit hook via wrapper file (copy)** — Use this when you want the hook to run the reviewer with custom options (e.g. `--with-tests=false`). Create `.git/hooks/pre-commit` with a shebang and an `exec` line so the process is replaced and Git receives the script’s exit code; then make the file executable with `chmod +x`.
+
+```shell
+echo '#!/bin/sh' > .git/hooks/pre-commit
+echo 'exec ./vendor/bin/reviewer --with-tests=false' >> .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
+
+To skip the reviewer on a single commit, use `git commit --no-verify`.
+
+**Arguments (Reviewer)**
 
 All options accept `true`, `1`, `yes` or `false`, `0`, `no`. Defaults are `true` unless noted.
 
@@ -95,9 +127,10 @@ All options accept `true`, `1`, `yes` or `false`, `0`, `no`. Defaults are `true`
 | `--with-phpstan`           | `true`  | Run PHPStan on staged PHP files                  |
 | `--with-tests`             | `true`  | Run test suite                                  |
 | `--with-composer-audit`    | `true`  | Run `composer audit`                             |
-| `--with-api-spec`          | `true`  | Generate OpenAPI spec to `storage/app/private/api.json` |
+| `--with-api-spec`          | `true`  | Generate OpenAPI spec to `storage/app/private/api.json` (via the project's `vendor/bin/openapi` CLI) |
+| `--full`                  | `false` | Run Pint, dumps check, PHP lint, and PHPStan on the whole project (excl. vendor/node_modules) instead of staged files only; Pint is not re-staged |
 
-**Examples**
+**Examples (Reviewer)**
 
 ```shell
 # Quick commit: only Pint and dumps check
@@ -105,9 +138,14 @@ All options accept `true`, `1`, `yes` or `false`, `0`, `no`. Defaults are `true`
 
 # Skip tests and Composer audit
 ./vendor/bin/reviewer --with-tests=false --with-composer-audit=false
+
+# Run file-based checks on the whole project (not just staged)
+./vendor/bin/reviewer --full=true
 ```
 
-### Deployer
+---
+
+## Deployer
 
 The `deployer` script runs common Laravel deployment steps on the server: optionally put the app in maintenance mode, clear and rebuild caches, optimize, run migrations, create the storage link, bring the app out of maintenance, run Filament optimize, and terminate Horizon. Each step can be toggled via options. Use it in your deployment pipeline or run it manually after deploying code.
 
@@ -119,14 +157,15 @@ The `deployer` script runs common Laravel deployment steps on the server: option
 * **Filament optimize** — `filament:optimize` (disable if the app does not use Filament)
 * **Optimize** — `optimize`
 * **Livewire assets** — `vendor:publish --force --tag=livewire:assets` (optional, default off)
-* **API spec** — Generate OpenAPI spec to `storage/app/private/api.json` (optional, default off)
+* **npm build** — `npm run build` for production frontend assets (optional, default off)
+* **API spec** — Generate OpenAPI spec to `storage/app/private/api.json` via the project's `vendor/bin/openapi` CLI (optional, default off)
 * **Migrations** — `migrate --force`
 * **Storage link** — `storage:link` (disable if the link already exists)
 * **Horizon terminate** — `horizon:terminate` (disable if the app does not use Horizon)
 
-**Order:** Build steps (caches, optimize, Livewire, API spec) run *before* bringing the app up so new code and assets are in place before traffic hits. Run the script from the **project root** (directory containing `artisan`).
+**Order:** Build steps (caches, optimize, Livewire, npm build, API spec) run *before* bringing the app up so new code and assets are in place before traffic hits. Run the script from the **project root** (directory containing `artisan`).
 
-**Usage**
+**Usage (Deployer)**
 
 ```shell
 # Run all steps (defaults)
@@ -145,48 +184,43 @@ The `deployer` script runs common Laravel deployment steps on the server: option
 ./vendor/bin/deployer --with-maintenance=true
 ```
 
-**Arguments**
+**Arguments (Deployer)**
 
 All boolean options accept `true`, `1`, `yes` or `false`, `0`, `no`. Defaults are `true` unless noted.
 
 | Argument                      | Default   | Description                                                                 |
 |-------------------------------|-----------|-----------------------------------------------------------------------------|
 | `--php`                       | `php`     | PHP binary or wrapper (e.g. `php`, `php8.4`, `./vendor/bin/sail php`)      |
-| `--with-maintenance`          | `false`   | Run `artisan down` before deploy and `artisan up` after                     |
+| `--with-maintenance`          | `true`    | Run `artisan down` before deploy and `artisan up` after                     |
 | `--with-migrate`              | `true`    | Run `artisan migrate --force`                                               |
 | `--with-storage-link`         | `true`    | Run `artisan storage:link`                                                  |
 | `--with-filament-optimize`    | `true`    | Run `artisan filament:optimize`                                             |
-| `--with-horizon-terminate`    | `true`    | Run `artisan horizon:terminate`                                             |
-| `--with-api-spec`             | `false`   | Generate OpenAPI spec to `storage/app/private/api.json`                    |
+| `--with-horizon-terminate`    | `false`   | Run `artisan horizon:terminate`                                             |
+| `--with-api-spec`             | `false`   | Generate OpenAPI spec to `storage/app/private/api.json` (runs the project's `vendor/bin/openapi` binary; your project must have an OpenAPI generator that provides this CLI) |
 | `--with-livewire-assets`      | `false`   | Publish Livewire static assets (`vendor:publish --force --tag=livewire:assets`) |
+| `--with-npm-build`            | `false`   | Run `npm run build` for production frontend assets (Vite etc.)                  |
 | `--with-route-cache`          | `true`    | Run `route:cache` (set `false` if your routes use closures)              |
 | `--with-event-cache`          | `true`    | Run `event:cache`                                                         |
 
 **Caveats:** `route:cache` fails when routes are defined as closures; use `--with-route-cache=false`. On repeat deploys, use `--with-storage-link=false` if the storage symlink already exists.
 
-**Examples**
+**Examples (Deployer)**
 
 ```shell
 # Full deploy with default PHP
 ./vendor/bin/deployer
 
-# PHP 8.4, no Horizon
-./vendor/bin/deployer --php=php8.4 --with-horizon-terminate=false
+# PHP 8.4, with Horizon termination
+./vendor/bin/deployer --php=php8.4 --with-horizon-terminate=true
 
 # Minimal: only caches and optimize, no migrate/link/horizon
 ./vendor/bin/deployer --with-migrate=false --with-storage-link=false --with-horizon-terminate=false
 
-# Full maintenance-mode deploy: down → deploy steps → up
-./vendor/bin/deployer --with-maintenance=true
+# Without maintenance-mode
+./vendor/bin/deployer --with-maintenance=false
 
-# Include OpenAPI spec generation
-./vendor/bin/deployer --with-api-spec=true
-
-# Publish Livewire static assets
-./vendor/bin/deployer --with-livewire-assets=true
-
-# Routes use closures (cannot use route:cache)
-./vendor/bin/deployer --with-route-cache=false
+# Build frontend assets during deploy (npm run build)
+./vendor/bin/deployer --with-npm-build=true
 ```
 
 ### TODO

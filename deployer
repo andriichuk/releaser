@@ -5,13 +5,14 @@ set -e
 # Defaults (can be overridden by CLI args)
 ############################################
 PHP_CMD=php
-WITH_MAINTENANCE=false
+WITH_MAINTENANCE=true
 WITH_MIGRATE=true
 WITH_STORAGE_LINK=true
 WITH_FILAMENT_OPTIMIZE=true
-WITH_HORIZON_TERMINATE=true
+WITH_HORIZON_TERMINATE=false
 WITH_API_SPEC=false
 WITH_LIVEWIRE_ASSETS=false
+WITH_NPM_BUILD=false
 WITH_ROUTE_CACHE=true
 WITH_EVENT_CACHE=true
 
@@ -35,6 +36,7 @@ usage() {
   printf '  --with-horizon-terminate=BOOL  Run horizon:terminate (default: true)\n'
   printf '  --with-api-spec=BOOL     Generate OpenAPI spec to storage/app/private/api.json (default: false)\n'
   printf '  --with-livewire-assets=BOOL  Publish Livewire static assets (default: false)\n'
+  printf '  --with-npm-build=BOOL    Run npm run build for production assets (default: false)\n'
   printf '  --with-route-cache=BOOL  Run route:cache (disable if using closure routes) (default: true)\n'
   printf '  --with-event-cache=BOOL  Run event:cache (default: true)\n'
   printf '  --help                   Show this help\n'
@@ -106,6 +108,13 @@ for arg in "$@"; do
         exit 1
       fi
       ;;
+    --with-npm-build=*)
+      VALUE="${arg#*=}"
+      if ! WITH_NPM_BUILD=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        exit 1
+      fi
+      ;;
     --with-route-cache=*)
       VALUE="${arg#*=}"
       if ! WITH_ROUTE_CACHE=$(parse_bool "$VALUE"); then
@@ -164,6 +173,11 @@ run_artisan optimize
 if [[ "$WITH_LIVEWIRE_ASSETS" == true ]]; then
   printf '\033[44mPublishing Livewire assets...\033[0m\n'
   run_artisan vendor:publish --force --tag=livewire:assets
+fi
+
+if [[ "$WITH_NPM_BUILD" == true ]]; then
+  printf '\033[44mBuilding frontend assets (npm run build)...\033[0m\n'
+  npm run build
 fi
 
 if [[ "$WITH_API_SPEC" == true ]]; then

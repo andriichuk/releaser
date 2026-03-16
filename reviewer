@@ -13,6 +13,7 @@ WITH_PHPSTAN=true
 WITH_TESTS=true
 WITH_COMPOSER_AUDIT=true
 WITH_API_SPEC=true
+FULL=false
 
 parse_bool() {
   case "$1" in
@@ -35,6 +36,7 @@ usage() {
   printf '  --with-tests=BOOL       Run test suite (default: true)\n'
   printf '  --with-composer-audit=BOOL  Run composer audit (default: true)\n'
   printf '  --with-api-spec=BOOL    Generate OpenAPI spec (default: true)\n'
+  printf '  --full=BOOL             Run file-based checks on whole project instead of staged only (default: false)\n'
   printf '  --help                  Show this help\n'
 }
 
@@ -102,6 +104,13 @@ for arg in "$@"; do
         exit 1
       fi
       ;;
+    --full=*)
+      VALUE="${arg#*=}"
+      if ! FULL=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE"
+        exit 1
+      fi
+      ;;
     *)
       printf '\033[0;31mUnknown argument: %s\033[0m\n' "$arg"
       exit 1
@@ -109,22 +118,35 @@ for arg in "$@"; do
   esac
 done
 
-# Staged PHP files as array (safe for spaces in paths)
+# PHP files to check: staged only or whole project (safe for spaces in paths)
 staged_files=()
-while IFS= read -r -d '' f; do
-  staged_files+=("$f")
-done < <(git diff --cached --name-only -z --diff-filter=ACMR | grep -z '\.php$' || true)
+if [[ "$FULL" == true ]]; then
+  while IFS= read -r -d '' f; do
+    staged_files+=("$f")
+  done < <(find . -name '*.php' -not -path './vendor/*' -not -path './node_modules/*' -not -path './.git/*' -print0 2>/dev/null || true)
+else
+  while IFS= read -r -d '' f; do
+    staged_files+=("$f")
+  done < <(git diff --cached --name-only -z --diff-filter=ACMR | grep -z '\.php$' || true)
+fi
 
 if [[ "$WITH_PINT" == true && ${#staged_files[@]} -gt 0 ]]; then
-  cmd=($PHP_CMD ./vendor/bin/pint "${staged_files[@]}")
-  "${cmd[@]}"
-  git add "${staged_files[@]}"
+  if [[ "$FULL" == true ]]; then
+    cmd=($PHP_CMD ./vendor/bin/pint)
+    "${cmd[@]}"
+  else
+    cmd=($PHP_CMD ./vendor/bin/pint "${staged_files[@]}")
+    "${cmd[@]}"
+    git add "${staged_files[@]}"
+  fi
 fi
 
 if [[ "$WITH_DUMPS_CHECK" == true ]]; then
   printf '\033[44mChecking PHP var_dump...\033[0m\n'
   dumps=""
-  if ((${#staged_files[@]} > 0)); then
+  if [[ "$FULL" == true ]]; then
+    dumps=$(git grep -Eiw "var_dump|dump\(|dd\(|ddd\(|exit;|exit\(" -- '*.php' 2>/dev/null || true)
+  elif ((${#staged_files[@]} > 0)); then
     dumps=$(git grep -Eiw "var_dump|dump\(|dd\(|ddd\(|exit;|exit\(" -- '*.php' "${staged_files[@]}" 2>/dev/null || true)
   fi
   if [ -n "$dumps" ]; then
@@ -145,10 +167,16 @@ if [[ "$WITH_PHP_LINT" == true && ${#staged_files[@]} -gt 0 ]]; then
   done
 fi
 
-if [[ "$WITH_PHPSTAN" == true && ${#staged_files[@]} -gt 0 ]]; then
-  printf '\033[44mChecking PHPStan...\033[0m\n'
-  cmd=($PHP_CMD ./vendor/bin/phpstan analyse "${staged_files[@]}")
-  "${cmd[@]}"
+if [[ "$WITH_PHPSTAN" == true ]]; then
+  if [[ ${#staged_files[@]} -gt 0 ]]; then
+    printf '\033[44mChecking PHPStan...\033[0m\n'
+    if [[ "$FULL" == true ]]; then
+      cmd=($PHP_CMD ./vendor/bin/phpstan analyse)
+    else
+      cmd=($PHP_CMD ./vendor/bin/phpstan analyse "${staged_files[@]}")
+    fi
+    "${cmd[@]}"
+  fi
 fi
 
 if [[ "$WITH_TESTS" == true ]]; then
