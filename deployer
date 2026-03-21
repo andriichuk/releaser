@@ -12,8 +12,7 @@ WITH_FILAMENT_OPTIMIZE=true
 WITH_HORIZON_TERMINATE=true
 WITH_API_SPEC=false
 WITH_LIVEWIRE_ASSETS=false
-WITH_ROUTE_CACHE=true
-WITH_EVENT_CACHE=true
+WITH_NPM_BUILD=false
 
 parse_bool() {
   case "$1" in
@@ -25,18 +24,17 @@ parse_bool() {
 
 usage() {
   printf 'Usage: %s [OPTIONS]\n' "${0##*/}"
-  printf '\nLaravel deployment: clear caches, optimize, migrate, optional steps.\n'
+  printf '\nLaravel 11+ deployment: clear caches, optimize, migrate, optional steps.\n'
   printf '\nOptions:\n'
   printf '  --php=BINARY              PHP binary (default: php)\n'
   printf '  --with-maintenance=BOOL  Run artisan down before deploy and artisan up after (default: false)\n'
   printf '  --with-migrate=BOOL      Run migrations (default: true)\n'
-  printf '  --with-storage-link=BOOL Create storage link (default: true)\n'
+  printf '  --with-storage-link=BOOL Run storage:link --force (default: true)\n'
   printf '  --with-filament-optimize=BOOL  Run filament:optimize (default: true)\n'
   printf '  --with-horizon-terminate=BOOL  Run horizon:terminate (default: true)\n'
   printf '  --with-api-spec=BOOL     Generate OpenAPI spec to storage/app/private/api.json (default: false)\n'
   printf '  --with-livewire-assets=BOOL  Publish Livewire static assets (default: false)\n'
-  printf '  --with-route-cache=BOOL  Run route:cache (disable if using closure routes) (default: true)\n'
-  printf '  --with-event-cache=BOOL  Run event:cache (default: true)\n'
+  printf '  --with-npm-build=BOOL    Run npm run build (default: false)\n'
   printf '  --help                   Show this help\n'
 }
 
@@ -106,16 +104,9 @@ for arg in "$@"; do
         exit 1
       fi
       ;;
-    --with-route-cache=*)
+    --with-npm-build=*)
       VALUE="${arg#*=}"
-      if ! WITH_ROUTE_CACHE=$(parse_bool "$VALUE"); then
-        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
-        exit 1
-      fi
-      ;;
-    --with-event-cache=*)
-      VALUE="${arg#*=}"
-      if ! WITH_EVENT_CACHE=$(parse_bool "$VALUE"); then
+      if ! WITH_NPM_BUILD=$(parse_bool "$VALUE"); then
         printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
         exit 1
       fi
@@ -143,19 +134,14 @@ fi
 printf '\033[44mClearing caches...\033[0m\n'
 run_artisan optimize:clear
 
-printf '\033[44mCaching views, config, routes, events...\033[0m\n'
-run_artisan view:cache
-run_artisan config:cache
-if [[ "$WITH_ROUTE_CACHE" == true ]]; then
-  run_artisan route:cache
-fi
-if [[ "$WITH_EVENT_CACHE" == true ]]; then
-  run_artisan event:cache
-fi
-
 if [[ "$WITH_FILAMENT_OPTIMIZE" == true ]]; then
   printf '\033[44mFilament optimize...\033[0m\n'
   run_artisan filament:optimize
+fi
+
+if [[ "$WITH_NPM_BUILD" == true ]]; then
+  printf '\033[44mBuilding frontend (npm run build)...\033[0m\n'
+  npm run build
 fi
 
 printf '\033[44mOptimizing...\033[0m\n'
@@ -178,7 +164,7 @@ fi
 
 if [[ "$WITH_STORAGE_LINK" == true ]]; then
   printf '\033[44mStorage link...\033[0m\n'
-  run_artisan storage:link
+  run_artisan storage:link --force
 fi
 
 if [[ "$WITH_MAINTENANCE" == true ]]; then

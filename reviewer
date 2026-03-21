@@ -6,12 +6,14 @@ set -e
 ############################################
 PHP_CMD="php"
 COMPOSER_CMD="composer"
+NPM_CMD="npm"
 WITH_PINT=true
 WITH_DUMPS_CHECK=true
 WITH_PHP_LINT=true
 WITH_PHPSTAN=true
 WITH_TESTS=true
 WITH_COMPOSER_AUDIT=true
+WITH_NPM_AUDIT=false
 WITH_API_SPEC=true
 
 parse_bool() {
@@ -24,16 +26,18 @@ parse_bool() {
 
 usage() {
   printf 'Usage: %s [OPTIONS]\n' "${0##*/}"
-  printf '\nPre-commit checks: Pint, dumps, lint, PHPStan, tests, API spec, Composer audit.\n'
+  printf '\nPre-commit checks: Pint, dumps, lint, PHPStan, tests, API spec, Composer audit, npm audit.\n'
   printf '\nOptions:\n'
   printf '  --php-cmd=CMD           PHP command (default: php)\n'
   printf '  --composer-cmd=CMD      Composer command (default: composer)\n'
+  printf '  --npm-cmd=CMD           npm command (default: npm)\n'
   printf '  --with-pint=BOOL        Run Pint on staged PHP files (default: true)\n'
   printf '  --with-dumps-check=BOOL Check for dump/exit in staged files (default: true)\n'
   printf '  --with-php-lint=BOOL    Run php -l on staged files (default: true)\n'
   printf '  --with-phpstan=BOOL    Run PHPStan on staged files (default: true)\n'
   printf '  --with-tests=BOOL       Run test suite (default: true)\n'
   printf '  --with-composer-audit=BOOL  Run composer audit (default: true)\n'
+  printf '  --with-npm-audit=BOOL   Run npm audit if package.json exists (default: false)\n'
   printf '  --with-api-spec=BOOL    Generate OpenAPI spec (default: true)\n'
   printf '  --help                  Show this help\n'
 }
@@ -52,6 +56,9 @@ for arg in "$@"; do
       ;;
     --composer-cmd=*)
       COMPOSER_CMD="${arg#*=}"
+      ;;
+    --npm-cmd=*)
+      NPM_CMD="${arg#*=}"
       ;;
     --with-pint=*)
       VALUE="${arg#*=}"
@@ -95,6 +102,13 @@ for arg in "$@"; do
         exit 1
       fi
       ;;
+    --with-npm-audit=*)
+      VALUE="${arg#*=}"
+      if ! WITH_NPM_AUDIT=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE"
+        exit 1
+      fi
+      ;;
     --with-api-spec=*)
       VALUE="${arg#*=}"
       if ! WITH_API_SPEC=$(parse_bool "$VALUE"); then
@@ -116,7 +130,7 @@ while IFS= read -r -d '' f; do
 done < <(git diff --cached --name-only -z --diff-filter=ACMR | grep -z '\.php$' || true)
 
 if [[ "$WITH_PINT" == true && ${#staged_files[@]} -gt 0 ]]; then
-  cmd=($PHP_CMD ./vendor/bin/pint "${staged_files[@]}")
+  cmd=($PHP_CMD ./vendor/bin/pint --ansi "${staged_files[@]}")
   "${cmd[@]}"
   git add "${staged_files[@]}"
 fi
@@ -128,7 +142,7 @@ if [[ "$WITH_DUMPS_CHECK" == true ]]; then
     dumps=$(git grep -Eiw "var_dump|dump\(|dd\(|ddd\(|exit;|exit\(" -- '*.php' "${staged_files[@]}" 2>/dev/null || true)
   fi
   if [ -n "$dumps" ]; then
-    printf '\033[101mYou\'ve left a dump function in one of your files! Aborting commit.\033[0m\n'
+    printf '\033[101m%s\033[0m\n' "You've left a dump function in one of your files! Aborting commit."
     echo "$dumps"
     exit 1
   fi
@@ -147,13 +161,13 @@ fi
 
 if [[ "$WITH_PHPSTAN" == true && ${#staged_files[@]} -gt 0 ]]; then
   printf '\033[44mChecking PHPStan...\033[0m\n'
-  cmd=($PHP_CMD ./vendor/bin/phpstan analyse "${staged_files[@]}")
+  cmd=($PHP_CMD ./vendor/bin/phpstan analyse --ansi "${staged_files[@]}")
   "${cmd[@]}"
 fi
 
 if [[ "$WITH_TESTS" == true ]]; then
   printf '\033[44mRunning tests...\033[0m\n'
-  cmd=($PHP_CMD artisan test --compact)
+  cmd=($PHP_CMD artisan test --compact --colors=always --ansi)
   "${cmd[@]}"
 fi
 
@@ -165,6 +179,12 @@ fi
 
 if [[ "$WITH_COMPOSER_AUDIT" == true ]]; then
   printf '\033[44mChecking Composer Dependencies...\033[0m\n'
-  cmd=($COMPOSER_CMD audit)
+  cmd=($COMPOSER_CMD audit --ansi)
+  "${cmd[@]}"
+fi
+
+if [[ "$WITH_NPM_AUDIT" == true && -f package.json ]]; then
+  printf '\033[44mChecking npm Dependencies...\033[0m\n'
+  cmd=($NPM_CMD audit)
   "${cmd[@]}"
 fi
