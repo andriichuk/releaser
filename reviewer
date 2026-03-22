@@ -195,7 +195,7 @@ fi
 
 if [[ "$WITH_TESTS" == true ]]; then
   printf '\033[44mRunning tests...\033[0m\n'
-  cmd=($PHP_CMD artisan test --compact --colors=always --ansi)
+  cmd=($PHP_CMD artisan test --compact --ansi)
   "${cmd[@]}"
 fi
 
