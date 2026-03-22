@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+set -e
+
+############################################
+# Defaults (can be overridden by CLI args)
+############################################
+PHP_CMD="php"
+COMPOSER_CMD="composer"
+NPM_CMD="npm"
+GIT_REMOTE="origin"
+MAIN_DEV_BRANCH="develop"
+FEATURE_BRANCH_PREFIX="feature/"
+WITH_MIGRATE=true
+WITH_CACHE_CLEAR=true
+WITH_NPM_DEV=false
+INSPIRATION_MESSAGE="Spark ignited. Build something amazing."
+
+parse_bool() {
+  case "$1" in
+    true|1|yes) echo true ;;
+    false|0|no) echo false ;;
+    *) return 1 ;;
+  esac
+}
+
+usage() {
+  printf 'Usage: %s [OPTIONS]\n' "${0##*/}"
+  printf '\nFeature-start flow: sync development branch, install deps, run migrations/cache clear, create feature branch.\n'
+  printf '\nOptions:\n'
+  printf '  --php-cmd=CMD                 PHP command (default: php)\n'
+  printf '  --composer-cmd=CMD            Composer command (default: composer)\n'
+  printf '  --npm-cmd=CMD                 npm command (default: npm)\n'
+  printf '  --git-remote-name=NAME        Git remote (default: origin)\n'
+  printf '  --main-dev-branch=BRANCH      Main development branch (default: develop)\n'
+  printf '  --feature-branch-prefix=TEXT  Prefix for new feature branches (default: feature/)\n'
+  printf '  --with-migrate=BOOL           Run artisan migrate (default: true)\n'
+  printf '  --with-cache-clear=BOOL       Run artisan optimize:clear (default: true)\n'
+  printf '  --with-npm-dev=BOOL           After setup, run npm run dev (default: false; blocks until Ctrl+C)\n'
+  printf '  --inspiration-message=TEXT    Message shown when setup is done\n'
+  printf '  --help                        Show this help\n'
+}
+
+############################################
+# CLI argument parsing
+############################################
+for arg in "$@"; do
+  case "$arg" in
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --php-cmd=*)
+      PHP_CMD="${arg#*=}"
+      ;;
+    --composer-cmd=*)
+      COMPOSER_CMD="${arg#*=}"
+      ;;
+    --npm-cmd=*)
+      NPM_CMD="${arg#*=}"
+      ;;
+    --git-remote-name=*)
+      GIT_REMOTE="${arg#*=}"
+      ;;
+    --main-dev-branch=*)
+      MAIN_DEV_BRANCH="${arg#*=}"
+      [[ -n "$MAIN_DEV_BRANCH" ]] || { echo "Error: --main-dev-branch requires a non-empty value."; exit 1; }
+      ;;
+    --feature-branch-prefix=*)
+      FEATURE_BRANCH_PREFIX="${arg#*=}"
+      [[ -n "$FEATURE_BRANCH_PREFIX" ]] || { echo "Error: --feature-branch-prefix requires a non-empty value."; exit 1; }
+      ;;
+    --with-migrate=*)
+      VALUE="${arg#*=}"
+      if ! WITH_MIGRATE=$(parse_bool "$VALUE"); then
+        echo "Error: invalid boolean for --with-migrate: $VALUE"
+        exit 1
+      fi
+      ;;
+    --with-cache-clear=*)
+      VALUE="${arg#*=}"
+      if ! WITH_CACHE_CLEAR=$(parse_bool "$VALUE"); then
+        echo "Error: invalid boolean for --with-cache-clear: $VALUE"
+        exit 1
+      fi
+      ;;
+    --with-npm-dev=*)
+      VALUE="${arg#*=}"
+      if ! WITH_NPM_DEV=$(parse_bool "$VALUE"); then
+        echo "Error: invalid boolean for --with-npm-dev: $VALUE"
+        exit 1
+      fi
+      ;;
+    --inspiration-message=*)
+      INSPIRATION_MESSAGE="${arg#*=}"
+      ;;
+    *)
+      echo "Error: unknown argument: $arg"
+      exit 1
+      ;;
+  esac
+done
+
+# helper colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+CYAN='\033[0;36m'
+RESET='\033[0m'
+
+run() {
+  echo -e "${YELLOW}+ $*${RESET}"
+  eval "$@"
+  return $?
+}
+
+fail() {
+  echo -e "${RED}✖ $*${RESET}"
+  exit 1
+}
+
+info() {
+  echo -e "${GREEN}→ $*${RESET}"
+}
+
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  fail "Not inside a git repository."
+fi
+
+if [[ ! -f artisan ]]; then
+  fail "Run from project root (directory containing artisan)."
+fi
+
+if ! git diff --quiet || ! git diff --staged --quiet; then
+  echo -e "${YELLOW}Warning: you have uncommitted changes.${RESET}"
+  read -r -p "Continue anyway? [y/N]: " cont
+  case "$cont" in
+    [Yy]*) ;;
+    *) fail "Aborting." ;;
+  esac
+fi
+
+info "Switching to ${MAIN_DEV_BRANCH}..."
+if git rev-parse --verify "$MAIN_DEV_BRANCH" >/dev/null 2>&1; then
+  run "git checkout ${MAIN_DEV_BRANCH}" || fail "Cannot switch to ${MAIN_DEV_BRANCH}"
+else
+  fail "Branch '${MAIN_DEV_BRANCH}' does not exist locally."
+fi
+
+info "Pulling latest ${MAIN_DEV_BRANCH} from ${GIT_REMOTE}..."
+run "git pull ${GIT_REMOTE} ${MAIN_DEV_BRANCH}" || fail "Failed to pull ${MAIN_DEV_BRANCH} from ${GIT_REMOTE}"
+
+info "Installing Composer dependencies..."
+run "${COMPOSER_CMD} install" || fail "Composer install failed"
+
+if [[ -f package.json ]]; then
+  info "Installing npm dependencies..."
+  run "${NPM_CMD} install" || fail "npm install failed"
+else
+  info "Skipping npm install (package.json not found)."
+fi
+
+if [[ "$WITH_MIGRATE" == true ]]; then
+  info "Running migrations..."
+  run "${PHP_CMD} artisan migrate" || fail "Migration failed"
+fi
+
+if [[ "$WITH_CACHE_CLEAR" == true ]]; then
+  info "Clearing caches..."
+  run "${PHP_CMD} artisan optimize:clear" || fail "Cache clear failed"
+fi
+
+echo
+read -e -i "${FEATURE_BRANCH_PREFIX}" -p "Enter new feature branch: " FEATURE_BRANCH
+FEATURE_BRANCH="${FEATURE_BRANCH// /}"
+
+if [[ -z "$FEATURE_BRANCH" ]]; then
+  fail "Feature branch cannot be empty."
+fi
+
+if [[ "$FEATURE_BRANCH" == "$FEATURE_BRANCH_PREFIX" ]]; then
+  fail "Please provide a branch suffix after '${FEATURE_BRANCH_PREFIX}'."
+fi
+
+if git rev-parse --verify "$FEATURE_BRANCH" >/dev/null 2>&1; then
+  fail "Branch '${FEATURE_BRANCH}' already exists."
+fi
+
+info "Creating and switching to ${FEATURE_BRANCH}..."
+run "git checkout -b ${FEATURE_BRANCH}" || fail "Failed to create branch ${FEATURE_BRANCH}"
+
+echo
+echo -e "${CYAN}${INSPIRATION_MESSAGE}${RESET}"
+
+if [[ "$WITH_NPM_DEV" == true ]]; then
+  if [[ -f package.json ]]; then
+    info "Starting dev server (${NPM_CMD} run dev) — press Ctrl+C to stop..."
+    run "${NPM_CMD} run dev" || fail "npm run dev failed"
+  else
+    info "Skipping npm run dev (package.json not found)."
+  fi
+fi

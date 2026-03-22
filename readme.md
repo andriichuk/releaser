@@ -1,14 +1,17 @@
 ## PHP project release tooling
 
-Bash helpers for PHP and Laravel: automate releases, guard commits, and run deploy steps.
+Bash helpers for PHP and Laravel: automate releases, guard commits, run deploy steps, and bootstrap local Sail environments.
 
 * **[Releaser](#releaser)** — release branches, versioning, tags, and post-release branch sync.
 * **[Reviewer](#reviewer)** — pre-commit checks (Pint, PHPStan, tests, audit, and more).
 * **[Deployer](#deployer)** — Laravel 11+ server deploy (caches, optimize, migrate, optional npm build).
+* **[Installer](#installer)** — local Laravel + Sail setup (env, Composer in Docker, Sail, Artisan, hosts, OpenAPI, pre-commit hook).
+* **[Spark](#spark)** — start a new feature: sync dev branch, install deps, run migrate/cache clear, create feature branch, optional `npm run dev`.
+* **[Rescue](#rescue)** — same as Spark, but creates a **bugfix** branch (default prefix `bugfix/`), optional `npm run dev`.
 
 ### Installation
 
-For local release automation (`releaser`) and pre-commit checks (`reviewer`), install as a dev dependency:
+For local release automation (`releaser`), pre-commit checks (`reviewer`), local Sail bootstrap (`installer`), and branch bootstrap (`spark`, `rescue`), install as a dev dependency:
 
 ```shell
 composer require andriichuk/releaser --dev
@@ -20,7 +23,7 @@ If you use [Deployer](#deployer) on servers or in deployment pipelines where Com
 composer require andriichuk/releaser
 ```
 
-A small Bash-based toolkit for PHP projects with three scripts: **Releaser** (release flow), **Reviewer** (code review, pre-commit), and **Deployer** (server-side deployment). Requirements and installation are shared; each section below documents one script.
+A small Bash-based toolkit for PHP projects with six scripts: **Releaser** (release flow), **Reviewer** (code review, pre-commit), **Deployer** (server-side deployment), **Installer** (local Laravel + Sail bootstrap), **Spark** (feature-start flow), and **Rescue** (bugfix-start flow). Requirements and installation are shared; each section below documents one script.
 
 ### Requirements
 
@@ -54,6 +57,26 @@ The `releaser` script automates release branch creation, version updates, and po
   --composer-cmd="./vendor/bin/sail composer" \
   --main-branch=main \
   --main-dev-branch=develop
+```
+
+Add to your project’s `composer.json` under `scripts` so you can run `composer release`:
+
+```json
+{
+    "scripts": {
+        "release": "vendor/bin/releaser --main-branch=main --main-dev-branch=develop"
+    }
+}
+```
+
+With Laravel Sail, use a script that passes the same flags as in the shell example above:
+
+```json
+{
+    "scripts": {
+        "release": "vendor/bin/releaser --php-cmd='./vendor/bin/sail php' --composer-cmd='./vendor/bin/sail composer' --main-branch=main --main-dev-branch=develop"
+    }
+}
 ```
 
 #### Arguments
@@ -102,6 +125,26 @@ The `reviewer` script runs checks on staged PHP files and the project before com
 
 # Custom options (e.g. skip tests and API spec)
 ./vendor/bin/reviewer --with-tests=false --with-api-spec=false
+```
+
+Add to your project’s `composer.json` under `scripts` so you can run `composer review`:
+
+```json
+{
+    "scripts": {
+        "review": "vendor/bin/reviewer"
+    }
+}
+```
+
+With Laravel Sail:
+
+```json
+{
+    "scripts": {
+        "review": "vendor/bin/reviewer --php-cmd='./vendor/bin/sail php' --composer-cmd='./vendor/bin/sail composer'"
+    }
+}
 ```
 
 **2. Pre-commit hook via symlink** — From the project root, create a symlink so `.git/hooks/pre-commit` points at the vendor script. The hook always runs the script with its default options; no wrapper file to maintain.
@@ -192,6 +235,26 @@ The `deployer` script runs common Laravel deployment steps on the server: option
 ./vendor/bin/deployer --with-maintenance=true
 ```
 
+Add to your project’s `composer.json` under `scripts` so you can run `composer deploy`:
+
+```json
+{
+    "scripts": {
+        "deploy": "vendor/bin/deployer"
+    }
+}
+```
+
+If deploy runs through Sail or a specific PHP binary:
+
+```json
+{
+    "scripts": {
+        "deploy": "vendor/bin/deployer --php='./vendor/bin/sail php'"
+    }
+}
+```
+
 #### Arguments
 
 All boolean options accept `true`, `1`, `yes` or `false`, `0`, `no`. Defaults are `true` unless noted.
@@ -235,6 +298,226 @@ All boolean options accept `true`, `1`, `yes` or `false`, `0`, `no`. Defaults ar
 ./vendor/bin/deployer --with-npm-build=true
 ```
 
+---
+
+## Installer
+
+The `installer` script runs a one-shot local [Laravel Sail](https://laravel.com/docs/sail) bootstrap from the **project root** (directory containing `artisan`). It checks out your development branch, copies `.env`, installs Composer dependencies via Docker (so `./vendor/bin/sail` exists), starts Sail, runs common Artisan steps, optionally updates `/etc/hosts`, and writes a Git pre-commit hook that runs **[Reviewer](#reviewer)** with Sail-friendly `--php-cmd` / `--composer-cmd` defaults.
+
+**Steps (each can be toggled via options):**
+
+* **Git** — `git checkout` on the main development branch (default `develop`)
+* **Env** — `cp .env.example .env` (skipped if `.env` already exists unless `--force-env=true`)
+* **Composer** — `docker run` with the Laravel Sail Composer image, `composer install` (optional `--ignore-platform-reqs`, default on)
+* **Sail** — `./vendor/bin/sail up -d` by default so the script can continue (see Caveats)
+* **Artisan** — `key:generate`; `migrate --seed` (optional)
+* **Hosts** — append one line to `/etc/hosts` via `sudo` (optional; skipped if the line is already present)
+* **IDE Helper** — `ide-helper:generate` and `ide-helper:meta` (optional, default off)
+* **OpenAPI** — `sail php ./vendor/bin/openapi app -o storage/app/private/api.json -f json` (optional)
+* **Storage** — `storage:link` (optional)
+* **Pre-commit** — `.git/hooks/pre-commit` with `exec ./vendor/bin/reviewer ...` (same pattern as the [wrapper example](#reviewer) in Reviewer; optional)
+
+If `.git` is missing, git checkout and the pre-commit hook are skipped with a short message.
+
+#### Usage
+
+```shell
+./vendor/bin/installer \
+  --main-dev-branch=develop \
+  --composer-docker-image=laravelsail/php84-composer:latest
+```
+
+Add to your project’s `composer.json` under `scripts` so you can run `composer install-local` (or another name you prefer):
+
+```json
+{
+    "scripts": {
+        "install-local": "vendor/bin/installer"
+    }
+}
+```
+
+#### Arguments
+
+All boolean options accept `true`, `1`, `yes` or `false`, `0`, `no`. Defaults are `true` unless noted.
+
+| Argument                         | Default                              | Description |
+|----------------------------------|--------------------------------------|-------------|
+| `--main-dev-branch`              | `develop`                            | Branch to check out when `--with-git-checkout=true` |
+| `--force-env`                    | `false`                              | Overwrite `.env` from `.env.example` if `.env` exists |
+| `--composer-docker-image`        | `laravelsail/php84-composer:latest`  | Docker image for `composer install` |
+| `--with-ignore-platform-reqs`    | `true`                               | Pass `--ignore-platform-reqs` to Composer |
+| `--composer-install-extra-args`  | *(empty)*                            | Extra tokens appended to `composer install` (space-separated) |
+| `--sail-bin`                     | `./vendor/bin/sail`                  | Sail script path (used for Artisan, OpenAPI, and hook `reviewer` args) |
+| `--sail-detached`                | `true`                               | Run `sail up -d`. If `false`, you must use `--skip-sail-up=true` and start Sail yourself first |
+| `--skip-sail-up`                 | `false`                              | Do not run `sail up` (containers already running) |
+| `--with-git-checkout`            | `true`                               | Run `git checkout` on `--main-dev-branch` |
+| `--with-hosts`                   | `true`                               | Append `--hosts-line` to `/etc/hosts` |
+| `--hosts-line`                   | `127.0.0.1 project.test`           | Line appended to `/etc/hosts` |
+| `--with-ide-helper`              | `false`                              | Run IDE Helper Artisan commands |
+| `--with-openapi`                 | `true`                               | Generate OpenAPI JSON under `storage/app/private/api.json` |
+| `--with-migrate-seed`            | `true`                               | Run `migrate --seed` |
+| `--with-storage-link`            | `true`                               | Run `storage:link` |
+| `--with-pre-commit-hook`         | `true`                               | Write `.git/hooks/pre-commit` to `exec` `reviewer` |
+| `--reviewer-hook-args`           | *(empty)*                            | Extra arguments appended to `reviewer` in the hook (e.g. `--with-tests=false`) |
+
+**Caveats:** The installer runs `sail up -d` by default so later Artisan steps are reachable in the same run. A blocking `sail up` would stop the script; use `--skip-sail-up=true` if you start Sail in another terminal first. The first `migrate --seed` can fail if the database container is not ready yet—run migrations again after Sail is healthy. Updating `/etc/hosts` requires `sudo`. IDE Helper requires the `barryvdh/laravel-ide-helper` package. OpenAPI generation requires your project’s `vendor/bin/openapi` CLI. For hook behavior and skipping checks on a single commit, see **[Reviewer](#reviewer)** (`git commit --no-verify`).
+
+#### Examples
+
+```shell
+# Full local bootstrap (defaults)
+./vendor/bin/installer
+
+# Custom dev branch and hosts entry
+./vendor/bin/installer --main-dev-branch=feature/x --hosts-line="127.0.0.1 myapp.test"
+
+# Skip hosts and OpenAPI; enable IDE Helper
+./vendor/bin/installer --with-hosts=false --with-openapi=false --with-ide-helper=true
+
+# Sail already running: skip sail up (vendor/ and Sail must already be in place)
+./vendor/bin/installer --skip-sail-up=true
+```
+
+---
+
+## Spark
+
+The `spark` script prepares your project for a new feature quickly: syncs your main development branch, installs dependencies, runs migrations and cache clear, then prompts for a new feature branch name with a prefilled prefix.
+
+**Steps:**
+
+* **Git sync** — switch to main development branch and pull latest changes from remote
+* **Dependencies** — run `composer install` and (when `package.json` exists) `npm install`
+* **Laravel prep** — run `artisan migrate` and `artisan optimize:clear` (optional via flags)
+* **Feature branch** — prompt with prefilled prefix (default `feature/`), then create and switch to the new branch
+* **Finish** — print an inspiration message
+* **Optional dev server** — with `--with-npm-dev=true`, run `npm run dev` after setup (blocks until you stop it)
+
+#### Usage
+
+```shell
+./vendor/bin/spark \
+  --main-dev-branch=develop \
+  --feature-branch-prefix=feature/
+```
+
+Add to your project’s `composer.json` under `scripts` so you can run `composer spark`:
+
+```json
+{
+    "scripts": {
+        "spark": "vendor/bin/spark --main-dev-branch=develop --feature-branch-prefix=feature/"
+    }
+}
+```
+
+With Laravel Sail:
+
+```json
+{
+    "scripts": {
+        "spark": "vendor/bin/spark --php-cmd='./vendor/bin/sail php' --composer-cmd='./vendor/bin/sail composer' --npm-cmd='./vendor/bin/sail npm' --main-dev-branch=develop --feature-branch-prefix=feature/"
+    }
+}
+```
+
+#### Arguments
+
+All boolean options accept `true`, `1`, `yes` or `false`, `0`, `no`. Defaults are `true` unless noted.
+
+| Argument                  | Default                         | Description |
+|---------------------------|---------------------------------|-------------|
+| `--php-cmd`               | `php`                           | PHP command or wrapper (e.g. `php`, `./vendor/bin/sail php`) |
+| `--composer-cmd`          | `composer`                      | Composer command (e.g. `composer`, `./vendor/bin/sail composer`) |
+| `--npm-cmd`               | `npm`                           | npm command (e.g. `npm`, `pnpm`) |
+| `--git-remote-name`       | `origin`                        | Git remote used for pull |
+| `--main-dev-branch`       | `develop`                       | Development branch to sync before creating feature branch |
+| `--feature-branch-prefix` | `feature/`                      | Default prefix prefilled in the branch prompt |
+| `--with-migrate`          | `true`                          | Run `artisan migrate` |
+| `--with-cache-clear`      | `true`                          | Run `artisan optimize:clear` |
+| `--with-npm-dev`          | `false`                         | After setup, run `npm run dev` (uses `--npm-cmd`; blocks until Ctrl+C) |
+| `--inspiration-message`   | `Spark ignited. Build something amazing.` | Message shown after branch creation |
+
+#### Examples
+
+```shell
+# Default feature-start flow
+./vendor/bin/spark
+
+# Custom prefix for branch naming
+./vendor/bin/spark --feature-branch-prefix=feat/
+
+# Skip Laravel prep steps
+./vendor/bin/spark --with-migrate=false --with-cache-clear=false
+
+# Start Vite / frontend dev server after branch is ready (blocks the terminal)
+./vendor/bin/spark --with-npm-dev=true
+```
+
+---
+
+## Rescue
+
+The `rescue` script is the same flow as **[Spark](#spark)**, but prompts for a **bugfix** branch with a prefilled prefix (default `bugfix/`).
+
+**Steps:** identical to Spark — git sync, `composer install`, `npm install` when `package.json` exists, `artisan migrate` / `optimize:clear` (optional), interactive bugfix branch creation, inspiration message, optional `npm run dev`.
+
+#### Usage
+
+```shell
+./vendor/bin/rescue \
+  --main-dev-branch=develop \
+  --bugfix-branch-prefix=bugfix/
+```
+
+Add to your project’s `composer.json` under `scripts` so you can run `composer rescue`:
+
+```json
+{
+    "scripts": {
+        "rescue": "vendor/bin/rescue --main-dev-branch=develop --bugfix-branch-prefix=bugfix/"
+    }
+}
+```
+
+With Laravel Sail:
+
+```json
+{
+    "scripts": {
+        "rescue": "vendor/bin/rescue --php-cmd='./vendor/bin/sail php' --composer-cmd='./vendor/bin/sail composer' --npm-cmd='./vendor/bin/sail npm' --main-dev-branch=develop --bugfix-branch-prefix=bugfix/"
+    }
+}
+```
+
+#### Arguments
+
+All boolean options accept `true`, `1`, `yes` or `false`, `0`, `no`. Defaults match Spark except branch naming.
+
+| Argument                  | Default                         | Description |
+|---------------------------|---------------------------------|-------------|
+| `--php-cmd`               | `php`                           | PHP command or wrapper (e.g. `php`, `./vendor/bin/sail php`) |
+| `--composer-cmd`          | `composer`                      | Composer command (e.g. `composer`, `./vendor/bin/sail composer`) |
+| `--npm-cmd`               | `npm`                           | npm command (e.g. `npm`, `pnpm`) |
+| `--git-remote-name`       | `origin`                        | Git remote used for pull |
+| `--main-dev-branch`       | `develop`                       | Development branch to sync before creating bugfix branch |
+| `--bugfix-branch-prefix`  | `bugfix/`                       | Default prefix prefilled in the branch prompt |
+| `--with-migrate`          | `true`                          | Run `artisan migrate` |
+| `--with-cache-clear`      | `true`                          | Run `artisan optimize:clear` |
+| `--with-npm-dev`          | `false`                         | After setup, run `npm run dev` (uses `--npm-cmd`; blocks until Ctrl+C) |
+| `--inspiration-message`   | `Rescue mission started. Ship the fix.` | Message shown after branch creation |
+
+#### Examples
+
+```shell
+# Default bugfix-start flow
+./vendor/bin/rescue
+
+# Custom prefix (e.g. fix/)
+./vendor/bin/rescue --bugfix-branch-prefix=fix/
+```
+
 ### TODO
 
 * Allow to merge without running PHP or Composer commands
@@ -243,3 +526,39 @@ All boolean options accept `true`, `1`, `yes` or `false`, `0`, `no`. Defaults ar
 * Main branch name detection
 * Latest version detection based on git tags or `config/app.php` file
 * Linters (PHPStan, Dumps checker, Pint, Native PHP Linter, OpenAPI doc validation, JS production bundle generation, etc.)
+
+---
+
+### All `composer.json` scripts
+
+Copy the `scripts` block below into your project’s `composer.json` (merge with existing keys). Adjust branch names and flags to match your repo.
+
+**Local PHP / Composer** (no Sail):
+
+```json
+{
+    "scripts": {
+        "release": "vendor/bin/releaser --main-branch=main --main-dev-branch=develop",
+        "review": "vendor/bin/reviewer",
+        "deploy": "vendor/bin/deployer",
+        "install-local": "vendor/bin/installer",
+        "spark": "vendor/bin/spark --main-dev-branch=develop --feature-branch-prefix=feature/",
+        "rescue": "vendor/bin/rescue --main-dev-branch=develop --bugfix-branch-prefix=bugfix/"
+    }
+}
+```
+
+**Laravel Sail** — same commands with Sail-friendly `php` / `composer` / `npm` wrappers where applicable (`installer` is unchanged; it uses Docker for Composer as documented):
+
+```json
+{
+    "scripts": {
+        "release": "vendor/bin/releaser --php-cmd='./vendor/bin/sail php' --composer-cmd='./vendor/bin/sail composer' --main-branch=main --main-dev-branch=develop",
+        "review": "vendor/bin/reviewer --php-cmd='./vendor/bin/sail php' --composer-cmd='./vendor/bin/sail composer'",
+        "deploy": "vendor/bin/deployer --php='./vendor/bin/sail php'",
+        "install-local": "vendor/bin/installer",
+        "spark": "vendor/bin/spark --php-cmd='./vendor/bin/sail php' --composer-cmd='./vendor/bin/sail composer' --npm-cmd='./vendor/bin/sail npm' --main-dev-branch=develop --feature-branch-prefix=feature/",
+        "rescue": "vendor/bin/rescue --php-cmd='./vendor/bin/sail php' --composer-cmd='./vendor/bin/sail composer' --npm-cmd='./vendor/bin/sail npm' --main-dev-branch=develop --bugfix-branch-prefix=bugfix/"
+    }
+}
+```

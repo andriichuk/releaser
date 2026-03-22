@@ -1,0 +1,291 @@
+#!/usr/bin/env bash
+set -e
+
+############################################
+# Defaults (can be overridden by CLI args)
+############################################
+MAIN_DEV_BRANCH="develop"
+FORCE_ENV=false
+COMPOSER_DOCKER_IMAGE="laravelsail/php84-composer:latest"
+WITH_IGNORE_PLATFORM_REQS=true
+COMPOSER_INSTALL_EXTRA_ARGS=""
+SAIL_BIN="./vendor/bin/sail"
+SAIL_DETACHED=true
+SKIP_SAIL_UP=false
+WITH_GIT_CHECKOUT=true
+WITH_HOSTS=true
+HOSTS_LINE="127.0.0.1 project.test"
+WITH_IDE_HELPER=false
+WITH_OPENAPI=true
+WITH_MIGRATE_SEED=true
+WITH_STORAGE_LINK=true
+WITH_PRE_COMMIT_HOOK=true
+REVIEWER_HOOK_ARGS=""
+
+parse_bool() {
+  case "$1" in
+    true|1|yes) echo true ;;
+    false|0|no) echo false ;;
+    *) return 1 ;;
+  esac
+}
+
+usage() {
+  printf 'Usage: %s [OPTIONS]\n' "${0##*/}"
+  printf '\nLocal Laravel + Sail bootstrap: git branch, .env, composer (Docker), Sail, Artisan, optional hosts, hook.\n'
+  printf '\nOptions:\n'
+  printf '  --main-dev-branch=BRANCH   Development branch to checkout (default: develop)\n'
+  printf '  --force-env=BOOL         Overwrite .env from .env.example if .env exists (default: false)\n'
+  printf '  --composer-docker-image=IMAGE  Image for composer install (default: laravelsail/php84-composer:latest)\n'
+  printf '  --with-ignore-platform-reqs=BOOL  Pass --ignore-platform-reqs to composer install (default: true)\n'
+  printf '  --composer-install-extra-args=ARGS  Extra args appended to composer install (quoted string)\n'
+  printf '  --sail-bin=PATH          Sail script path (default: ./vendor/bin/sail)\n'
+  printf '  --sail-detached=BOOL     Run sail up -d (default: true). If false, use --skip-sail-up after starting Sail manually.\n'
+  printf '  --skip-sail-up=BOOL      Do not run sail up (containers already running) (default: false)\n'
+  printf '  --with-git-checkout=BOOL Run git checkout on main-dev-branch (default: true)\n'
+  printf '  --with-hosts=BOOL        Append hosts line via sudo tee (default: true)\n'
+  printf '  --hosts-line=LINE        Line to add to /etc/hosts (default: 127.0.0.1 project.test)\n'
+  printf '  --with-ide-helper=BOOL   Run ide-helper:generate and ide-helper:meta (default: false)\n'
+  printf '  --with-openapi=BOOL      Generate OpenAPI to storage/app/private/api.json (default: true)\n'
+  printf '  --with-migrate-seed=BOOL Run migrate --seed (default: true)\n'
+  printf '  --with-storage-link=BOOL Run storage:link (default: true)\n'
+  printf '  --with-pre-commit-hook=BOOL  Write .git/hooks/pre-commit to exec reviewer (default: true)\n'
+  printf '  --reviewer-hook-args=ARGS    Extra args for reviewer in the hook (e.g. --with-tests=false)\n'
+  printf '  --help                   Show this help\n'
+}
+
+############################################
+# CLI argument parsing
+############################################
+for arg in "$@"; do
+  case "$arg" in
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --main-dev-branch=*)
+      MAIN_DEV_BRANCH="${arg#*=}"
+      [[ -n "$MAIN_DEV_BRANCH" ]] || { printf '\033[0;31m--main-dev-branch= requires a non-empty value\033[0m\n' >&2; exit 1; }
+      ;;
+    --force-env=*)
+      VALUE="${arg#*=}"
+      if ! FORCE_ENV=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --composer-docker-image=*)
+      COMPOSER_DOCKER_IMAGE="${arg#*=}"
+      [[ -n "$COMPOSER_DOCKER_IMAGE" ]] || { printf '\033[0;31m--composer-docker-image= requires a non-empty value\033[0m\n' >&2; exit 1; }
+      ;;
+    --with-ignore-platform-reqs=*)
+      VALUE="${arg#*=}"
+      if ! WITH_IGNORE_PLATFORM_REQS=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --composer-install-extra-args=*)
+      COMPOSER_INSTALL_EXTRA_ARGS="${arg#*=}"
+      ;;
+    --sail-bin=*)
+      SAIL_BIN="${arg#*=}"
+      [[ -n "$SAIL_BIN" ]] || { printf '\033[0;31m--sail-bin= requires a non-empty value\033[0m\n' >&2; exit 1; }
+      ;;
+    --sail-detached=*)
+      VALUE="${arg#*=}"
+      if ! SAIL_DETACHED=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --skip-sail-up=*)
+      VALUE="${arg#*=}"
+      if ! SKIP_SAIL_UP=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --with-git-checkout=*)
+      VALUE="${arg#*=}"
+      if ! WITH_GIT_CHECKOUT=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --with-hosts=*)
+      VALUE="${arg#*=}"
+      if ! WITH_HOSTS=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --hosts-line=*)
+      HOSTS_LINE="${arg#*=}"
+      [[ -n "$HOSTS_LINE" ]] || { printf '\033[0;31m--hosts-line= requires a non-empty value\033[0m\n' >&2; exit 1; }
+      ;;
+    --with-ide-helper=*)
+      VALUE="${arg#*=}"
+      if ! WITH_IDE_HELPER=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --with-openapi=*)
+      VALUE="${arg#*=}"
+      if ! WITH_OPENAPI=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --with-migrate-seed=*)
+      VALUE="${arg#*=}"
+      if ! WITH_MIGRATE_SEED=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --with-storage-link=*)
+      VALUE="${arg#*=}"
+      if ! WITH_STORAGE_LINK=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --with-pre-commit-hook=*)
+      VALUE="${arg#*=}"
+      if ! WITH_PRE_COMMIT_HOOK=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --reviewer-hook-args=*)
+      REVIEWER_HOOK_ARGS="${arg#*=}"
+      ;;
+    *)
+      printf '\033[0;31mUnknown argument: %s\033[0m\n' "$arg" >&2
+      exit 1
+      ;;
+  esac
+done
+
+############################################
+# Helpers
+############################################
+run_sail() {
+  "$SAIL_BIN" "$@"
+}
+
+run_sail_artisan() {
+  "$SAIL_BIN" artisan "$@"
+}
+
+############################################
+# Install steps
+############################################
+if [[ ! -f artisan ]]; then
+  printf '\033[0;31mRun from project root (directory containing artisan).\033[0m\n' >&2
+  exit 1
+fi
+
+if [[ "$WITH_GIT_CHECKOUT" == true ]]; then
+  if [[ ! -d .git ]]; then
+    printf '\033[0;33mSkipping git checkout: no .git directory.\033[0m\n'
+  else
+    printf '\033[44mChecking out branch %s...\033[0m\n' "$MAIN_DEV_BRANCH"
+    git checkout "$MAIN_DEV_BRANCH"
+  fi
+fi
+
+if [[ -f .env ]] && [[ "$FORCE_ENV" != true ]]; then
+  printf '\033[0;33mSkipping .env copy: .env already exists (use --force-env=true to overwrite).\033[0m\n'
+else
+  if [[ ! -f .env.example ]]; then
+    printf '\033[0;31m.env.example not found; cannot create .env.\033[0m\n' >&2
+    exit 1
+  fi
+  printf '\033[44mCreating .env from .env.example...\033[0m\n'
+  cp .env.example .env
+fi
+
+printf '\033[44mInstalling Composer dependencies (Docker)...\033[0m\n'
+COMPOSER_ARGS=(install)
+if [[ "$WITH_IGNORE_PLATFORM_REQS" == true ]]; then
+  COMPOSER_ARGS+=(--ignore-platform-reqs)
+fi
+if [[ -n "$COMPOSER_INSTALL_EXTRA_ARGS" ]]; then
+  read -r -a EXTRA_ARR <<< "$COMPOSER_INSTALL_EXTRA_ARGS"
+  COMPOSER_ARGS+=("${EXTRA_ARR[@]}")
+fi
+
+docker run --rm \
+  -u "$(id -u):$(id -g)" \
+  -v "$(pwd):/var/www/html" \
+  -w /var/www/html \
+  "$COMPOSER_DOCKER_IMAGE" \
+  composer "${COMPOSER_ARGS[@]}"
+
+if [[ "$SKIP_SAIL_UP" == true ]]; then
+  printf '\033[0;33mSkipping sail up (--skip-sail-up=true).\033[0m\n'
+elif [[ "$SAIL_DETACHED" == true ]]; then
+  printf '\033[44mStarting Sail (detached)...\033[0m\n'
+  run_sail up -d
+else
+  printf '\033[0;31mBlocking sail up would prevent later steps in this script. Use --sail-detached=true (default), or start Sail yourself then re-run with --skip-sail-up=true.\033[0m\n' >&2
+  exit 1
+fi
+
+printf '\033[44mGenerating application key...\033[0m\n'
+run_sail_artisan key:generate
+
+if [[ "$WITH_MIGRATE_SEED" == true ]]; then
+  printf '\033[44mRunning migrations and seeders...\033[0m\n'
+  run_sail_artisan migrate --seed
+fi
+
+if [[ "$WITH_HOSTS" == true ]]; then
+  if grep -Fq "$HOSTS_LINE" /etc/hosts 2>/dev/null; then
+    printf '\033[0;33mSkipping /etc/hosts: entry already present.\033[0m\n'
+  else
+    printf '\033[44mAdding hosts entry (sudo)...\033[0m\n'
+    echo "$HOSTS_LINE" | sudo tee -a /etc/hosts > /dev/null
+  fi
+fi
+
+if [[ "$WITH_IDE_HELPER" == true ]]; then
+  printf '\033[44mIDE Helper (generate, meta)...\033[0m\n'
+  run_sail_artisan ide-helper:generate
+  run_sail_artisan ide-helper:meta
+fi
+
+if [[ "$WITH_OPENAPI" == true ]]; then
+  printf '\033[44mGenerating OpenAPI documentation...\033[0m\n'
+  run_sail php ./vendor/bin/openapi app -o storage/app/private/api.json -f json
+fi
+
+if [[ "$WITH_STORAGE_LINK" == true ]]; then
+  printf '\033[44mStorage link...\033[0m\n'
+  run_sail_artisan storage:link
+fi
+
+if [[ "$WITH_PRE_COMMIT_HOOK" == true ]]; then
+  if [[ ! -d .git ]]; then
+    printf '\033[0;33mSkipping pre-commit hook: no .git directory.\033[0m\n'
+  else
+    printf '\033[44mInstalling pre-commit hook (reviewer)...\033[0m\n'
+    HOOK_PATH=".git/hooks/pre-commit"
+    # shellcheck disable=SC2016
+    {
+      printf '%s\n' '#!/bin/sh'
+      printf 'exec ./vendor/bin/reviewer --php-cmd="%s php" --composer-cmd="%s composer"' "$SAIL_BIN" "$SAIL_BIN"
+      if [[ -n "$REVIEWER_HOOK_ARGS" ]]; then
+        printf ' %s' "$REVIEWER_HOOK_ARGS"
+      fi
+      printf '\n'
+    } > "$HOOK_PATH"
+    chmod +x "$HOOK_PATH"
+  fi
+fi
+
+printf '\033[0;32mInstaller finished.\033[0m\n'
+printf '\033[0;36mHappy building — ship something great.\033[0m\n'
