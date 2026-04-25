@@ -176,7 +176,14 @@ if [[ "$WITH_COMPOSER_AUDIT" == true ]]; then
 fi
 
 echo
-read -p "Enter release version (eg. 1.0.0): " VERSION
+VERSION_PROMPT_HINT="eg. 1.0.0"
+if [ -f "${CONFIG_FILE}" ]; then
+  CURRENT_VERSION=$(sed -nE "s/.*['\"]version['\"]\s*=>\s*['\"]([^'\"]+)['\"].*/\1/p" "${CONFIG_FILE}" | head -n1)
+  if [ -n "${CURRENT_VERSION}" ]; then
+    VERSION_PROMPT_HINT="${CURRENT_VERSION}"
+  fi
+fi
+read -p "Enter release version (${VERSION_PROMPT_HINT}): " VERSION
 VERSION="${VERSION// /}" # trim spaces
 if [ -z "$VERSION" ]; then
   fail "No version provided, aborting."
@@ -221,8 +228,35 @@ if [[ "$TAG_EXISTS_LOCALLY" == true || "$TAG_EXISTS_REMOTE" == true ]]; then
 fi
 
 RELEASE_BRANCH="${BRANCH_PREFIX}${VERSION}"
-info "Creating branch ${RELEASE_BRANCH}..."
-run "git checkout -b ${RELEASE_BRANCH}" || fail "Failed to create branch ${RELEASE_BRANCH}"
+if git rev-parse --verify "${RELEASE_BRANCH}" >/dev/null 2>&1; then
+  echo -e "${YELLOW}Branch '${RELEASE_BRANCH}' already exists.${RESET}"
+  echo "Choose an action:"
+  echo "  1) Switch to it"
+  echo "  2) Delete it and recreate"
+  echo "  3) Do nothing and stop"
+  read -p "Enter choice [1/2/3] (default: 1): " branch_choice
+  branch_choice="${branch_choice:-1}"
+
+  case "$branch_choice" in
+    1)
+      info "Switching to branch ${RELEASE_BRANCH}..."
+      run "git checkout ${RELEASE_BRANCH}" || fail "Failed to switch to branch ${RELEASE_BRANCH}"
+      ;;
+    2)
+      info "Deleting branch ${RELEASE_BRANCH}..."
+      run "git branch -D ${RELEASE_BRANCH}" || fail "Failed to delete branch ${RELEASE_BRANCH}"
+
+      info "Creating branch ${RELEASE_BRANCH}..."
+      run "git checkout -b ${RELEASE_BRANCH}" || fail "Failed to create branch ${RELEASE_BRANCH}"
+      ;;
+    3|*)
+      fail "Aborting release."
+      ;;
+  esac
+else
+  info "Creating branch ${RELEASE_BRANCH}..."
+  run "git checkout -b ${RELEASE_BRANCH}" || fail "Failed to create branch ${RELEASE_BRANCH}"
+fi
 
 if [[ "$WITH_APP_VERSION_UPDATE" == true ]]; then
   info "Updating version in ${CONFIG_FILE} to ${VERSION}..."
@@ -243,6 +277,9 @@ if [[ "$WITH_APP_VERSION_UPDATE" == true ]]; then
 fi
 
 if ! git diff --quiet || ! git diff --staged --quiet; then
+  info "Staging all current changes..."
+  run "git add -A" || fail "git add failed"
+
   COMMIT_MSG="${COMMIT_MSG_TEMPLATE//\{\{version\}\}/${VERSION}}"
   info "Committing changes: ${COMMIT_MSG}"
   run "git commit -m \"${COMMIT_MSG}\" --no-verify" || fail "git commit failed"
