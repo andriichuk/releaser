@@ -170,7 +170,11 @@ if [[ "$WITH_CACHE_CLEAR" == true ]]; then
 fi
 
 echo
-read -e -i "${FEATURE_BRANCH_PREFIX}" -p "Enter new feature branch: " FEATURE_BRANCH
+printf "Enter new feature branch [%s]: " "${FEATURE_BRANCH_PREFIX}"
+read -r FEATURE_BRANCH
+if [[ -z "$FEATURE_BRANCH" ]]; then
+  FEATURE_BRANCH="${FEATURE_BRANCH_PREFIX}"
+fi
 FEATURE_BRANCH="${FEATURE_BRANCH// /}"
 
 if [[ -z "$FEATURE_BRANCH" ]]; then
