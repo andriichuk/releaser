@@ -231,7 +231,7 @@ RELEASE_BRANCH="${BRANCH_PREFIX}${VERSION}"
 if git rev-parse --verify "${RELEASE_BRANCH}" >/dev/null 2>&1; then
   echo -e "${YELLOW}Branch '${RELEASE_BRANCH}' already exists.${RESET}"
   echo "Choose an action:"
-  echo "  1) Switch to it"
+  echo "  1) Switch and refresh"
   echo "  2) Delete it and recreate"
   echo "  3) Do nothing and stop"
   read -p "Enter choice [1/2/3] (default: 1): " branch_choice
@@ -241,6 +241,9 @@ if git rev-parse --verify "${RELEASE_BRANCH}" >/dev/null 2>&1; then
     1)
       info "Switching to branch ${RELEASE_BRANCH}..."
       run "git checkout ${RELEASE_BRANCH}" || fail "Failed to switch to branch ${RELEASE_BRANCH}"
+
+      info "Refreshing ${RELEASE_BRANCH} from ${GIT_REMOTE}/${MAIN_DEV_BRANCH}..."
+      run "git pull ${GIT_REMOTE} ${MAIN_DEV_BRANCH}" || fail "Failed to pull ${MAIN_DEV_BRANCH} into ${RELEASE_BRANCH}"
       ;;
     2)
       info "Deleting branch ${RELEASE_BRANCH}..."

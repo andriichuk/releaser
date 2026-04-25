@@ -520,11 +520,9 @@ All boolean options accept `true`, `1`, `yes` or `false`, `0`, `no`. Defaults ma
 
 ### TODO
 
-* Allow to merge without running PHP or Composer commands
+* Allow to use releaser without running PHP or Composer commands
 * Improve the logic of detecting that MR is merged (e.g. check git tags on the main branch)
-* Release notes generation based on commit messages
 * Main branch name detection
-* Latest version detection based on git tags or `config/app.php` file
 * Linters (PHPStan, Dumps checker, Pint, Native PHP Linter, OpenAPI doc validation, JS production bundle generation, etc.)
 
 ---
