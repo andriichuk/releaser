@@ -16,6 +16,7 @@ WITH_COMPOSER_AUDIT=true
 WITH_NPM_AUDIT=false
 WITH_API_SPEC=true
 FULL=false
+AUTO_SAIL=true
 
 parse_bool() {
   case "$1" in
@@ -29,9 +30,10 @@ usage() {
   printf 'Usage: %s [OPTIONS]\n' "${0##*/}"
   printf '\nPre-commit checks: Pint, dumps, lint, PHPStan, tests, API spec, Composer audit, npm audit.\n'
   printf '\nOptions:\n'
-  printf '  --php-cmd=CMD           PHP command (default: php)\n'
+  printf '  --php-cmd=CMD           PHP command (default: php; multi-word allowed, e.g. ./vendor/bin/sail php)\n'
   printf '  --composer-cmd=CMD      Composer command (default: composer)\n'
   printf '  --npm-cmd=CMD           npm command (default: npm)\n'
+  printf '  --auto-sail=BOOL        Use ./vendor/bin/sail when defaults are php/composer and Sail is up (default: true)\n'
   printf '  --with-pint=BOOL        Run Pint on staged PHP files (default: true)\n'
   printf '  --with-dumps-check=BOOL Check for dump/exit in staged files (default: true)\n'
   printf '  --with-php-lint=BOOL    Run php -l on staged files (default: true)\n'
@@ -42,6 +44,96 @@ usage() {
   printf '  --with-api-spec=BOOL    Generate OpenAPI spec (default: true)\n'
   printf '  --full=BOOL             Run file-based checks on whole project instead of staged only (default: false)\n'
   printf '  --help                  Show this help\n'
+}
+
+fail() {
+  printf '\033[0;31m%s\033[0m\n' "$*" >&2
+  exit 1
+}
+
+run() {
+  printf '\033[33m+ %s\033[0m\n' "$*"
+  eval "$@"
+}
+
+ensure_project_root() {
+  if git rev-parse --show-toplevel >/dev/null 2>&1; then
+    cd "$(git rev-parse --show-toplevel)" || fail "Cannot change to git repository root."
+  fi
+}
+
+detect_sail_commands() {
+  if [[ "$AUTO_SAIL" != true ]]; then
+    return
+  fi
+
+  if [[ "$PHP_CMD" != "php" || "$COMPOSER_CMD" != "composer" ]]; then
+    return
+  fi
+
+  if [[ ! -x ./vendor/bin/sail ]]; then
+    return
+  fi
+
+  if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+    return
+  fi
+
+  if ! ./vendor/bin/sail exec -T app true >/dev/null 2>&1; then
+    return
+  fi
+
+  PHP_CMD="./vendor/bin/sail php"
+  COMPOSER_CMD="./vendor/bin/sail composer"
+
+  if [[ "$NPM_CMD" == "npm" ]]; then
+    NPM_CMD="./vendor/bin/sail npm"
+  fi
+
+  printf '\033[0;36mUsing Laravel Sail (%s)\033[0m\n' "$PHP_CMD"
+}
+
+verify_php_cmd() {
+  if eval "${PHP_CMD} --version" >/dev/null 2>&1; then
+    return
+  fi
+
+  if [[ "$PHP_CMD" == *sail* ]]; then
+    if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+      fail "Docker or Podman is not running. Start it, then run: ./vendor/bin/sail up -d"
+    fi
+
+    fail "Cannot run \"${PHP_CMD}\". Start Sail with: ./vendor/bin/sail up -d"
+  fi
+
+  fail "PHP command not found or not executable: ${PHP_CMD}"
+}
+
+verify_composer_cmd() {
+  if eval "${COMPOSER_CMD} --version" >/dev/null 2>&1; then
+    return
+  fi
+
+  if [[ "$COMPOSER_CMD" == *sail* ]]; then
+    if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+      fail "Docker or Podman is not running. Start it, then run: ./vendor/bin/sail up -d"
+    fi
+
+    fail "Cannot run \"${COMPOSER_CMD}\". Start Sail with: ./vendor/bin/sail up -d"
+  fi
+
+  fail "Composer command not found or not executable: ${COMPOSER_CMD}"
+}
+
+quoted_pint_files() {
+  local quoted=""
+  local file
+
+  for file in "${staged_files[@]}"; do
+    quoted+=" $(printf '%q' "$file")"
+  done
+
+  printf '%s' "$quoted"
 }
 
 ############################################
@@ -61,6 +153,13 @@ for arg in "$@"; do
       ;;
     --npm-cmd=*)
       NPM_CMD="${arg#*=}"
+      ;;
+    --auto-sail=*)
+      VALUE="${arg#*=}"
+      if ! AUTO_SAIL=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE"
+        exit 1
+      fi
       ;;
     --with-pint=*)
       VALUE="${arg#*=}"
@@ -132,6 +231,14 @@ for arg in "$@"; do
   esac
 done
 
+ensure_project_root
+detect_sail_commands
+verify_php_cmd
+
+if [[ "$WITH_COMPOSER_AUDIT" == true ]]; then
+  verify_composer_cmd
+fi
+
 # PHP files to check: staged only or whole project (safe for spaces in paths)
 staged_files=()
 if [[ "$FULL" == true ]]; then
@@ -146,11 +253,10 @@ fi
 
 if [[ "$WITH_PINT" == true && ${#staged_files[@]} -gt 0 ]]; then
   if [[ "$FULL" == true ]]; then
-    cmd=($PHP_CMD ./vendor/bin/pint --ansi)
-    "${cmd[@]}"
+    run "${PHP_CMD} ./vendor/bin/pint --ansi"
   else
-    cmd=($PHP_CMD ./vendor/bin/pint --ansi "${staged_files[@]}")
-    "${cmd[@]}"
+    # shellcheck disable=SC2086
+    run "${PHP_CMD} ./vendor/bin/pint --ansi$(quoted_pint_files)"
     git add "${staged_files[@]}"
   fi
 fi
@@ -173,11 +279,7 @@ fi
 if [[ "$WITH_PHP_LINT" == true && ${#staged_files[@]} -gt 0 ]]; then
   printf '\033[44mChecking PHP Lint...\033[0m\n'
   for f in "${staged_files[@]}"; do
-    cmd=($PHP_CMD -l -d display_errors=0 -- "$f")
-    "${cmd[@]}" || {
-      printf '\033[101mFix the error before commit.\033[0m\n'
-      exit 1
-    }
+    run "${PHP_CMD} -l -d display_errors=0 -- $(printf '%q' "$f")" || fail 'Fix the error before commit.'
   done
 fi
 
@@ -185,34 +287,30 @@ if [[ "$WITH_PHPSTAN" == true ]]; then
   if [[ ${#staged_files[@]} -gt 0 ]]; then
     printf '\033[44mChecking PHPStan...\033[0m\n'
     if [[ "$FULL" == true ]]; then
-      cmd=($PHP_CMD ./vendor/bin/phpstan analyse --ansi)
+      run "${PHP_CMD} ./vendor/bin/phpstan analyse --ansi"
     else
-      cmd=($PHP_CMD ./vendor/bin/phpstan analyse --ansi "${staged_files[@]}")
+      # shellcheck disable=SC2086
+      run "${PHP_CMD} ./vendor/bin/phpstan analyse --ansi$(quoted_pint_files)"
     fi
-    "${cmd[@]}"
   fi
 fi
 
 if [[ "$WITH_TESTS" == true ]]; then
   printf '\033[44mRunning tests...\033[0m\n'
-  cmd=($PHP_CMD artisan test --compact --ansi)
-  "${cmd[@]}"
+  run "${PHP_CMD} artisan test --compact --ansi"
 fi
 
 if [[ "$WITH_API_SPEC" == true ]]; then
   printf '\033[44mGenerating API Spec ...\033[0m\n'
-  cmd=($PHP_CMD ./vendor/bin/openapi app -o storage/app/private/api.json -f json)
-  "${cmd[@]}"
+  run "${PHP_CMD} ./vendor/bin/openapi app -o storage/app/private/api.json -f json"
 fi
 
 if [[ "$WITH_COMPOSER_AUDIT" == true ]]; then
   printf '\033[44mChecking Composer Dependencies...\033[0m\n'
-  cmd=($COMPOSER_CMD audit --ansi)
-  "${cmd[@]}"
+  run "${COMPOSER_CMD} audit --ansi"
 fi
 
 if [[ "$WITH_NPM_AUDIT" == true && -f package.json ]]; then
   printf '\033[44mChecking npm Dependencies...\033[0m\n'
-  cmd=($NPM_CMD audit)
-  "${cmd[@]}"
+  run "${NPM_CMD} audit"
 fi

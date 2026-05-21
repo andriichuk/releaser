@@ -277,7 +277,7 @@ if [[ "$WITH_PRE_COMMIT_HOOK" == true ]]; then
     # shellcheck disable=SC2016
     {
       printf '%s\n' '#!/bin/sh'
-      printf 'exec ./vendor/bin/reviewer --php-cmd="%s php" --composer-cmd="%s composer"' "$SAIL_BIN" "$SAIL_BIN"
+      printf 'exec ./vendor/bin/reviewer'
       if [[ -n "$REVIEWER_HOOK_ARGS" ]]; then
         printf ' %s' "$REVIEWER_HOOK_ARGS"
       fi

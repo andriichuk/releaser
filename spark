@@ -170,8 +170,7 @@ if [[ "$WITH_CACHE_CLEAR" == true ]]; then
 fi
 
 echo
-printf "Enter new feature branch [%s]: " "${FEATURE_BRANCH_PREFIX}"
-read -r FEATURE_BRANCH
+read -e -i "${FEATURE_BRANCH_PREFIX}" -p "Enter new feature branch: " FEATURE_BRANCH
 if [[ -z "$FEATURE_BRANCH" ]]; then
   FEATURE_BRANCH="${FEATURE_BRANCH_PREFIX}"
 fi
@@ -186,11 +185,37 @@ if [[ "$FEATURE_BRANCH" == "$FEATURE_BRANCH_PREFIX" ]]; then
 fi
 
 if git rev-parse --verify "$FEATURE_BRANCH" >/dev/null 2>&1; then
-  fail "Branch '${FEATURE_BRANCH}' already exists."
-fi
+  echo -e "${YELLOW}Branch '${FEATURE_BRANCH}' already exists.${RESET}"
+  echo "Choose an action:"
+  echo "  1) Switch and refresh"
+  echo "  2) Delete it and recreate"
+  echo "  3) Do nothing and stop"
+  read -r -p "Enter choice [1/2/3] (default: 1): " branch_choice
+  branch_choice="${branch_choice:-1}"
 
-info "Creating and switching to ${FEATURE_BRANCH}..."
-run "git checkout -b ${FEATURE_BRANCH}" || fail "Failed to create branch ${FEATURE_BRANCH}"
+  case "$branch_choice" in
+    1)
+      info "Switching to branch ${FEATURE_BRANCH}..."
+      run "git checkout ${FEATURE_BRANCH}" || fail "Failed to switch to branch ${FEATURE_BRANCH}"
+
+      info "Refreshing ${FEATURE_BRANCH} from ${GIT_REMOTE}/${MAIN_DEV_BRANCH}..."
+      run "git pull ${GIT_REMOTE} ${MAIN_DEV_BRANCH}" || fail "Failed to pull ${MAIN_DEV_BRANCH} into ${FEATURE_BRANCH}"
+      ;;
+    2)
+      info "Deleting branch ${FEATURE_BRANCH}..."
+      run "git branch -D ${FEATURE_BRANCH}" || fail "Failed to delete branch ${FEATURE_BRANCH}"
+
+      info "Creating and switching to ${FEATURE_BRANCH}..."
+      run "git checkout -b ${FEATURE_BRANCH}" || fail "Failed to create branch ${FEATURE_BRANCH}"
+      ;;
+    3|*)
+      fail "Aborting."
+      ;;
+  esac
+else
+  info "Creating and switching to ${FEATURE_BRANCH}..."
+  run "git checkout -b ${FEATURE_BRANCH}" || fail "Failed to create branch ${FEATURE_BRANCH}"
+fi
 
 echo
 echo -e "${CYAN}${INSPIRATION_MESSAGE}${RESET}"

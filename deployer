@@ -24,7 +24,7 @@ parse_bool() {
 
 usage() {
   printf 'Usage: %s [OPTIONS]\n' "${0##*/}"
-  printf '\nLaravel 11+ deployment: clear caches, optimize, migrate, optional steps.\n'
+  printf '\nLaravel 11+ deployment: clear optimization caches (except application cache store), optimize, migrate, optional steps.\n'
   printf '\nOptions:\n'
   printf '  --php=BINARY              PHP binary (default: php)\n'
   printf '  --with-maintenance=BOOL  Run artisan down before deploy and artisan up after (default: true)\n'
@@ -131,13 +131,8 @@ if [[ "$WITH_MAINTENANCE" == true ]]; then
   run_artisan down
 fi
 
-printf '\033[44mClearing caches...\033[0m\n'
-run_artisan optimize:clear
-
-if [[ "$WITH_FILAMENT_OPTIMIZE" == true ]]; then
-  printf '\033[44mFilament optimize...\033[0m\n'
-  run_artisan filament:optimize
-fi
+printf '\033[44mClearing optimization caches (excluding application cache store)...\033[0m\n'
+run_artisan optimize:clear --except=cache
 
 if [[ "$WITH_NPM_BUILD" == true ]]; then
   printf '\033[44mBuilding frontend (npm run build)...\033[0m\n'
@@ -146,6 +141,11 @@ fi
 
 printf '\033[44mOptimizing...\033[0m\n'
 run_artisan optimize
+
+if [[ "$WITH_FILAMENT_OPTIMIZE" == true ]]; then
+  printf '\033[44mFilament optimize...\033[0m\n'
+  run_artisan filament:optimize
+fi
 
 if [[ "$WITH_LIVEWIRE_ASSETS" == true ]]; then
   printf '\033[44mPublishing Livewire assets...\033[0m\n'

@@ -99,7 +99,7 @@ With Laravel Sail, use a script that passes the same flags as in the shell examp
 
 ## Reviewer
 
-The `reviewer` script runs checks on staged PHP files and the project before commit. It is intended to be used as a Git pre-commit hook or run manually. It requires Laravel Sail (or equivalent) for running commands.
+The `reviewer` script runs checks on staged PHP files and the project before commit. It is intended to be used as a Git pre-commit hook or run manually. When `./vendor/bin/sail` exists and Docker is running, it automatically uses Sail for PHP/Composer/npm (see `--auto-sail`).
 
 **Steps (each can be toggled via options):**
 
@@ -117,11 +117,14 @@ The `reviewer` script runs checks on staged PHP files and the project before com
 **1. Run manually** — You can pass any combination of `--php-cmd`, `--composer-cmd`, `--npm-cmd`, `--with-tests`, `--with-api-spec`, `--full`, etc.
 
 ```shell
-# All checks (defaults)
+# All checks (auto-detects Sail when ./vendor/bin/sail exists and containers are up)
 ./vendor/bin/reviewer
 
-# With Laravel Sail
+# Explicit Sail wrappers (optional; same as auto-detect when Sail is up)
 ./vendor/bin/reviewer --php-cmd="./vendor/bin/sail php" --composer-cmd="./vendor/bin/sail composer"
+
+# Host PHP only (disable Sail auto-detection)
+./vendor/bin/reviewer --auto-sail=false
 
 # Custom options (e.g. skip tests and API spec)
 ./vendor/bin/reviewer --with-tests=false --with-api-spec=false
@@ -137,23 +140,17 @@ Add to your project’s `composer.json` under `scripts` so you can run `composer
 }
 ```
 
-With Laravel Sail:
-
-```json
-{
-    "scripts": {
-        "review": "vendor/bin/reviewer --php-cmd='./vendor/bin/sail php' --composer-cmd='./vendor/bin/sail composer'"
-    }
-}
-```
-
-**2. Pre-commit hook via symlink** — From the project root, create a symlink so `.git/hooks/pre-commit` points at the vendor script. The hook always runs the script with its default options; no wrapper file to maintain.
+**2. Pre-commit hook** — From the project root, point the hook at `vendor/bin/reviewer` (Sail is auto-detected when available):
 
 ```shell
-ln -sf ../../vendor/bin/reviewer .git/hooks/pre-commit
+cat > .git/hooks/pre-commit <<'EOF'
+#!/bin/sh
+exec ./vendor/bin/reviewer
+EOF
+chmod +x .git/hooks/pre-commit
 ```
 
-**3. Pre-commit hook via wrapper file (copy)** — Use this when you want the hook to run the reviewer with custom options (e.g. `--with-tests=false`). Create `.git/hooks/pre-commit` with a shebang and an `exec` line so the process is replaced and Git receives the script’s exit code; then make the file executable with `chmod +x`.
+**3. Pre-commit hook with custom options** — Append flags (e.g. `--with-tests=false`) on the `exec` line:
 
 ```shell
 echo '#!/bin/sh' > .git/hooks/pre-commit
@@ -169,9 +166,10 @@ All options accept `true`, `1`, `yes` or `false`, `0`, `no`. Defaults are `true`
 
 | Argument                   | Default | Description                                                                 |
 |----------------------------|---------|-----------------------------------------------------------------------------|
-| `--php-cmd`                | `php`   | PHP command or wrapper (e.g. `php`, `./vendor/bin/sail php`, `docker exec -T app php`) |
+| `--php-cmd`                | `php`   | PHP command or wrapper (e.g. `php`, `./vendor/bin/sail php`, `docker exec -T app php`). Multi-word values are supported. |
 | `--composer-cmd`           | `composer` | Composer command (e.g. `composer`, `./vendor/bin/sail composer`)        |
 | `--npm-cmd`                | `npm`   | npm command (e.g. `npm`, `pnpm`)                                            |
+| `--auto-sail`              | `true`  | When `php`/`composer` defaults and `./vendor/bin/sail` is up, use Sail automatically |
 | `--with-pint`              | `true`  | Run Pint on staged PHP files and re-stage                                   |
 | `--with-dumps-check`       | `true`  | Check staged PHP files for dump/exit calls      |
 | `--with-php-lint`          | `true`  | Run `php -l` on staged PHP files                 |
@@ -199,22 +197,22 @@ All options accept `true`, `1`, `yes` or `false`, `0`, `no`. Defaults are `true`
 
 ## Deployer
 
-The `deployer` script runs common Laravel deployment steps on the server: optionally put the app in maintenance mode, clear and rebuild caches, optimize, optionally run `npm run build`, run migrations, create the storage link, bring the app out of maintenance, run Filament optimize, and terminate Horizon. Each step can be toggled via options. Use it in your deployment pipeline or run it manually after deploying code.
+The `deployer` script runs common Laravel deployment steps on the server: optionally put the app in maintenance mode, clear optimization caches, optionally run `npm run build`, run Laravel `optimize`, optionally run `filament:optimize`, run migrations, create the storage link, bring the app out of maintenance, and optionally terminate Horizon. Each step can be toggled via options. Use it in your deployment pipeline or run it manually after deploying code.
 
 **Steps (each can be toggled via options):**
 
 * **Maintenance** — `artisan down` before deploy and `artisan up` after (single option; default on)
-* **Clear caches** — `optimize:clear` (config, route, view, cache, compiled, events)
-* **Filament optimize** — `filament:optimize` (disable if the app does not use Filament)
-* **Optimize** — `optimize` (config, events, routes, views)
+* **Clear caches** — `optimize:clear --except=cache` (config, route, view, compiled, events; skips `cache:clear` so the default cache store is not flushed)
 * **npm build** — `npm run build` for production frontend assets (optional, default off)
+* **Optimize** — `optimize` (config, events, routes, views)
+* **Filament optimize** — `filament:optimize` after Laravel `optimize` (component + icon caches; not covered by `optimize`; disable if the app does not use Filament)
 * **Livewire assets** — `vendor:publish --force --tag=livewire:assets` (optional, default off)
 * **API spec** — Generate OpenAPI spec to `storage/app/private/api.json` via the project's `vendor/bin/openapi` CLI (optional, default off)
 * **Migrations** — `migrate --force`
 * **Storage link** — `storage:link --force` (recreates symlink if needed; safe on repeat deploys)
 * **Horizon terminate** — `horizon:terminate` (disable if the app does not use Horizon)
 
-**Order:** Build steps (caches, Filament optimize, npm, optimize, Livewire, API spec) run *before* bringing the app up so new code and assets are in place before traffic hits. Run the script from the **project root** (directory containing `artisan`).
+**Order:** Build steps (caches, npm, Laravel optimize, Filament optimize, Livewire, API spec) run *before* bringing the app up so new code and assets are in place before traffic hits. Run the script from the **project root** (directory containing `artisan`).
 
 #### Usage
 
@@ -552,7 +550,7 @@ Copy the `scripts` block below into your project’s `composer.json` (merge with
 {
     "scripts": {
         "release": "vendor/bin/releaser --php-cmd='./vendor/bin/sail php' --composer-cmd='./vendor/bin/sail composer' --main-branch=main --main-dev-branch=develop",
-        "review": "vendor/bin/reviewer --php-cmd='./vendor/bin/sail php' --composer-cmd='./vendor/bin/sail composer'",
+        "review": "vendor/bin/reviewer",
         "deploy": "vendor/bin/deployer --php='./vendor/bin/sail php'",
         "install-local": "vendor/bin/installer",
         "spark": "vendor/bin/spark --php-cmd='./vendor/bin/sail php' --composer-cmd='./vendor/bin/sail composer' --npm-cmd='./vendor/bin/sail npm' --main-dev-branch=develop --feature-branch-prefix=feature/",

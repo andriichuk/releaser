@@ -182,11 +182,37 @@ if [[ "$BUGFIX_BRANCH" == "$BUGFIX_BRANCH_PREFIX" ]]; then
 fi
 
 if git rev-parse --verify "$BUGFIX_BRANCH" >/dev/null 2>&1; then
-  fail "Branch '${BUGFIX_BRANCH}' already exists."
-fi
+  echo -e "${YELLOW}Branch '${BUGFIX_BRANCH}' already exists.${RESET}"
+  echo "Choose an action:"
+  echo "  1) Switch and refresh"
+  echo "  2) Delete it and recreate"
+  echo "  3) Do nothing and stop"
+  read -r -p "Enter choice [1/2/3] (default: 1): " branch_choice
+  branch_choice="${branch_choice:-1}"
 
-info "Creating and switching to ${BUGFIX_BRANCH}..."
-run "git checkout -b ${BUGFIX_BRANCH}" || fail "Failed to create branch ${BUGFIX_BRANCH}"
+  case "$branch_choice" in
+    1)
+      info "Switching to branch ${BUGFIX_BRANCH}..."
+      run "git checkout ${BUGFIX_BRANCH}" || fail "Failed to switch to branch ${BUGFIX_BRANCH}"
+
+      info "Refreshing ${BUGFIX_BRANCH} from ${GIT_REMOTE}/${MAIN_DEV_BRANCH}..."
+      run "git pull ${GIT_REMOTE} ${MAIN_DEV_BRANCH}" || fail "Failed to pull ${MAIN_DEV_BRANCH} into ${BUGFIX_BRANCH}"
+      ;;
+    2)
+      info "Deleting branch ${BUGFIX_BRANCH}..."
+      run "git branch -D ${BUGFIX_BRANCH}" || fail "Failed to delete branch ${BUGFIX_BRANCH}"
+
+      info "Creating and switching to ${BUGFIX_BRANCH}..."
+      run "git checkout -b ${BUGFIX_BRANCH}" || fail "Failed to create branch ${BUGFIX_BRANCH}"
+      ;;
+    3|*)
+      fail "Aborting."
+      ;;
+  esac
+else
+  info "Creating and switching to ${BUGFIX_BRANCH}..."
+  run "git checkout -b ${BUGFIX_BRANCH}" || fail "Failed to create branch ${BUGFIX_BRANCH}"
+fi
 
 echo
 echo -e "${CYAN}${INSPIRATION_MESSAGE}${RESET}"
