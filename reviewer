@@ -58,6 +58,20 @@ run() {
   eval "$@"
 }
 
+lint_php_file() {
+  local file="$1"
+  local quoted_file
+  quoted_file=$(printf '%q' "$file")
+
+  # Do not use "--" before the path: docker compose / Sail treat it as compose
+  # option terminator, so php -l runs without a file and appears to hang or scan everything.
+  if [[ "$PHP_CMD" == *sail* ]]; then
+    run "${PHP_CMD} -l ${quoted_file}"
+  else
+    run "${PHP_CMD} -l -d display_errors=0 ${quoted_file}"
+  fi
+}
+
 ensure_project_root() {
   if git rev-parse --show-toplevel >/dev/null 2>&1; then
     cd "$(git rev-parse --show-toplevel)" || fail "Cannot change to git repository root."
@@ -352,9 +366,9 @@ if [[ "$WITH_DUMPS_CHECK" == true ]]; then
 fi
 
 if [[ "$WITH_PHP_LINT" == true && ${#changed_files[@]} -gt 0 ]]; then
-  printf '\033[44mChecking PHP Lint...\033[0m\n'
+  printf '\033[44mChecking PHP Lint (%s file(s))...\033[0m\n' "${#changed_files[@]}"
   for f in "${changed_files[@]}"; do
-    run "${PHP_CMD} -l -d display_errors=0 -- $(printf '%q' "$f")" || fail 'Fix the error before commit.'
+    lint_php_file "$f" || fail 'Fix the error before commit.'
   done
 fi
 
