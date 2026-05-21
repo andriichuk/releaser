@@ -16,6 +16,7 @@ WITH_COMPOSER_AUDIT=true
 WITH_NPM_AUDIT=false
 WITH_API_SPEC=true
 FULL=false
+STAGED_ONLY=false
 AUTO_SAIL=true
 
 parse_bool() {
@@ -34,15 +35,16 @@ usage() {
   printf '  --composer-cmd=CMD      Composer command (default: composer)\n'
   printf '  --npm-cmd=CMD           npm command (default: npm)\n'
   printf '  --auto-sail=BOOL        Use ./vendor/bin/sail when defaults are php/composer and Sail is up (default: true)\n'
-  printf '  --with-pint=BOOL        Run Pint on staged PHP files (default: true)\n'
-  printf '  --with-dumps-check=BOOL Check for dump/exit in staged files (default: true)\n'
-  printf '  --with-php-lint=BOOL    Run php -l on staged files (default: true)\n'
-  printf '  --with-phpstan=BOOL    Run PHPStan on staged files (default: true)\n'
-  printf '  --with-tests=BOOL       Run test suite (default: true)\n'
+  printf '  --staged-only=BOOL      Only git-staged PHP files (default: false; use true for pre-commit hooks)\n'
+  printf '  --with-pint=BOOL        Run Pint on changed PHP files (default: true)\n'
+  printf '  --with-dumps-check=BOOL Check for dump/exit in changed files (default: true)\n'
+  printf '  --with-php-lint=BOOL    Run php -l on changed files (default: true)\n'
+  printf '  --with-phpstan=BOOL    Run PHPStan on changed files (default: true)\n'
+  printf '  --with-tests=BOOL       Run tests for changed test files, or full suite if app code changed (default: true)\n'
   printf '  --with-composer-audit=BOOL  Run composer audit (default: true)\n'
   printf '  --with-npm-audit=BOOL   Run npm audit if package.json exists (default: false)\n'
-  printf '  --with-api-spec=BOOL    Generate OpenAPI spec (default: true)\n'
-  printf '  --full=BOOL             Run file-based checks on whole project instead of staged only (default: false)\n'
+  printf '  --with-api-spec=BOOL    Generate OpenAPI spec when app PHP files changed (default: true)\n'
+  printf '  --full=BOOL             Run file-based checks on the whole project (default: false)\n'
   printf '  --help                  Show this help\n'
 }
 
@@ -125,15 +127,74 @@ verify_composer_cmd() {
   fail "Composer command not found or not executable: ${COMPOSER_CMD}"
 }
 
-quoted_pint_files() {
+quoted_changed_files() {
   local quoted=""
   local file
 
-  for file in "${staged_files[@]}"; do
+  for file in "${changed_files[@]}"; do
     quoted+=" $(printf '%q' "$file")"
   done
 
   printf '%s' "$quoted"
+}
+
+quoted_changed_test_files() {
+  local quoted=""
+  local file
+
+  for file in "${changed_test_files[@]}"; do
+    quoted+=" $(printf '%q' "$file")"
+  done
+
+  printf '%s' "$quoted"
+}
+
+collect_changed_php_files() {
+  changed_files=()
+
+  if [[ "$FULL" == true ]]; then
+    while IFS= read -r -d '' f; do
+      changed_files+=("$f")
+    done < <(find . -name '*.php' -not -path './vendor/*' -not -path './node_modules/*' -not -path './.git/*' -print0 2>/dev/null || true)
+
+    return
+  fi
+
+  if [[ "$STAGED_ONLY" == true ]]; then
+    while IFS= read -r -d '' f; do
+      changed_files+=("$f")
+    done < <(git diff --cached --name-only -z --diff-filter=ACMR | grep -z '\.php$' || true)
+
+    return
+  fi
+
+  # Staged and unstaged changes since HEAD (default for composer review).
+  while IFS= read -r -d '' f; do
+    changed_files+=("$f")
+  done < <(git diff --name-only -z HEAD --diff-filter=ACMR | grep -z '\.php$' || true)
+}
+
+collect_changed_test_files() {
+  changed_test_files=()
+  local file
+
+  for file in "${changed_files[@]}"; do
+    if [[ "$file" == tests/* ]]; then
+      changed_test_files+=("$file")
+    fi
+  done
+}
+
+has_changed_app_code() {
+  local file
+
+  for file in "${changed_files[@]}"; do
+    if [[ "$file" == app/* || "$file" == routes/* || "$file" == bootstrap/* || "$file" == config/* || "$file" == database/* ]]; then
+      return 0
+    fi
+  done
+
+  return 1
 }
 
 ############################################
@@ -157,6 +218,13 @@ for arg in "$@"; do
     --auto-sail=*)
       VALUE="${arg#*=}"
       if ! AUTO_SAIL=$(parse_bool "$VALUE"); then
+        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE"
+        exit 1
+      fi
+      ;;
+    --staged-only=*)
+      VALUE="${arg#*=}"
+      if ! STAGED_ONLY=$(parse_bool "$VALUE"); then
         printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE"
         exit 1
       fi
@@ -239,25 +307,32 @@ if [[ "$WITH_COMPOSER_AUDIT" == true ]]; then
   verify_composer_cmd
 fi
 
-# PHP files to check: staged only or whole project (safe for spaces in paths)
-staged_files=()
-if [[ "$FULL" == true ]]; then
-  while IFS= read -r -d '' f; do
-    staged_files+=("$f")
-  done < <(find . -name '*.php' -not -path './vendor/*' -not -path './node_modules/*' -not -path './.git/*' -print0 2>/dev/null || true)
+changed_files=()
+changed_test_files=()
+
+collect_changed_php_files
+
+if [[ ${#changed_files[@]} -eq 0 && "$FULL" != true ]]; then
+  printf '\033[0;33mNo changed PHP files to review.\033[0m\n'
 else
-  while IFS= read -r -d '' f; do
-    staged_files+=("$f")
-  done < <(git diff --cached --name-only -z --diff-filter=ACMR | grep -z '\.php$' || true)
+  if [[ "$STAGED_ONLY" == true ]]; then
+    printf '\033[0;36mReviewing %s staged PHP file(s).\033[0m\n' "${#changed_files[@]}"
+  elif [[ "$FULL" == true ]]; then
+    printf '\033[0;36mReviewing the whole project (%s PHP file(s)).\033[0m\n' "${#changed_files[@]}"
+  else
+    printf '\033[0;36mReviewing %s changed PHP file(s) since HEAD.\033[0m\n' "${#changed_files[@]}"
+  fi
 fi
 
-if [[ "$WITH_PINT" == true && ${#staged_files[@]} -gt 0 ]]; then
+if [[ "$WITH_PINT" == true && ${#changed_files[@]} -gt 0 ]]; then
   if [[ "$FULL" == true ]]; then
     run "${PHP_CMD} ./vendor/bin/pint --ansi"
   else
     # shellcheck disable=SC2086
-    run "${PHP_CMD} ./vendor/bin/pint --ansi$(quoted_pint_files)"
-    git add "${staged_files[@]}"
+    run "${PHP_CMD} ./vendor/bin/pint --ansi$(quoted_changed_files)"
+    if [[ "$STAGED_ONLY" == true ]]; then
+      git add "${changed_files[@]}"
+    fi
   fi
 fi
 
@@ -266,8 +341,8 @@ if [[ "$WITH_DUMPS_CHECK" == true ]]; then
   dumps=""
   if [[ "$FULL" == true ]]; then
     dumps=$(git grep -Eiw "var_dump|dump\(|dd\(|ddd\(|exit;|exit\(" -- '*.php' 2>/dev/null || true)
-  elif ((${#staged_files[@]} > 0)); then
-    dumps=$(git grep -Eiw "var_dump|dump\(|dd\(|ddd\(|exit;|exit\(" -- '*.php' "${staged_files[@]}" 2>/dev/null || true)
+  elif ((${#changed_files[@]} > 0)); then
+    dumps=$(git grep -Eiw "var_dump|dump\(|dd\(|ddd\(|exit;|exit\(" -- '*.php' "${changed_files[@]}" 2>/dev/null || true)
   fi
   if [ -n "$dumps" ]; then
     printf '\033[101m%s\033[0m\n' "You've left a dump function in one of your files! Aborting commit."
@@ -276,31 +351,39 @@ if [[ "$WITH_DUMPS_CHECK" == true ]]; then
   fi
 fi
 
-if [[ "$WITH_PHP_LINT" == true && ${#staged_files[@]} -gt 0 ]]; then
+if [[ "$WITH_PHP_LINT" == true && ${#changed_files[@]} -gt 0 ]]; then
   printf '\033[44mChecking PHP Lint...\033[0m\n'
-  for f in "${staged_files[@]}"; do
+  for f in "${changed_files[@]}"; do
     run "${PHP_CMD} -l -d display_errors=0 -- $(printf '%q' "$f")" || fail 'Fix the error before commit.'
   done
 fi
 
-if [[ "$WITH_PHPSTAN" == true ]]; then
-  if [[ ${#staged_files[@]} -gt 0 ]]; then
-    printf '\033[44mChecking PHPStan...\033[0m\n'
-    if [[ "$FULL" == true ]]; then
-      run "${PHP_CMD} ./vendor/bin/phpstan analyse --ansi"
-    else
-      # shellcheck disable=SC2086
-      run "${PHP_CMD} ./vendor/bin/phpstan analyse --ansi$(quoted_pint_files)"
-    fi
+if [[ "$WITH_PHPSTAN" == true && ${#changed_files[@]} -gt 0 ]]; then
+  printf '\033[44mChecking PHPStan...\033[0m\n'
+  if [[ "$FULL" == true ]]; then
+    run "${PHP_CMD} ./vendor/bin/phpstan analyse --ansi"
+  else
+    # shellcheck disable=SC2086
+    run "${PHP_CMD} ./vendor/bin/phpstan analyse --ansi$(quoted_changed_files)"
   fi
 fi
 
 if [[ "$WITH_TESTS" == true ]]; then
-  printf '\033[44mRunning tests...\033[0m\n'
-  run "${PHP_CMD} artisan test --compact --ansi"
+  collect_changed_test_files
+
+  if has_changed_app_code; then
+    printf '\033[44mRunning full test suite (application code changed)...\033[0m\n'
+    run "${PHP_CMD} artisan test --compact --ansi"
+  elif ((${#changed_test_files[@]} > 0)); then
+    printf '\033[44mRunning tests for %s changed test file(s)...\033[0m\n' "${#changed_test_files[@]}"
+    # shellcheck disable=SC2086
+    run "${PHP_CMD} artisan test --compact --ansi$(quoted_changed_test_files)"
+  else
+    printf '\033[0;33mSkipping tests: no changed test or application PHP files.\033[0m\n'
+  fi
 fi
 
-if [[ "$WITH_API_SPEC" == true ]]; then
+if [[ "$WITH_API_SPEC" == true && ( "$FULL" == true || has_changed_app_code ) ]]; then
   printf '\033[44mGenerating API Spec ...\033[0m\n'
   run "${PHP_CMD} ./vendor/bin/openapi app -o storage/app/private/api.json -f json"
 fi

@@ -99,16 +99,22 @@ With Laravel Sail, use a script that passes the same flags as in the shell examp
 
 ## Reviewer
 
-The `reviewer` script runs checks on staged PHP files and the project before commit. It is intended to be used as a Git pre-commit hook or run manually. When `./vendor/bin/sail` exists and Docker is running, it automatically uses Sail for PHP/Composer/npm (see `--auto-sail`).
+The `reviewer` script runs checks on changed PHP files before commit or during manual review. It is intended to be used as a Git pre-commit hook or run manually via `composer review`. When `./vendor/bin/sail` exists and Docker is running, it automatically uses Sail for PHP/Composer/npm (see `--auto-sail`).
+
+**File scope:**
+
+* **Manual / `composer review`** (default) — All PHP files changed since `HEAD` (staged and unstaged)
+* **Pre-commit hook** — Use `--staged-only=true` so only staged PHP files are checked (Pint re-stages them)
+* **`--full=true`** — Whole project (excl. `vendor/`, `node_modules/`)
 
 **Steps (each can be toggled via options):**
 
-* **Pint** — Format staged PHP files and re-stage them (whole-project mode with `--full` does not re-stage)
-* **Dumps check** — Fail if staged PHP files contain `var_dump`, `dump()`, `dd()`, `ddd()`, or `exit;` / `exit(`
-* **PHP lint** — Run `php -l` on each staged PHP file
-* **PHPStan** — Static analysis on staged PHP files
-* **Tests** — Run `php artisan test --compact` (with colors when supported)
-* **API spec** — Generate OpenAPI spec to `storage/app/private/api.json` (via the project's `vendor/bin/openapi` CLI)
+* **Pint** — Format changed PHP files; re-stages when `--staged-only=true`
+* **Dumps check** — Fail if changed PHP files contain `var_dump`, `dump()`, `dd()`, `ddd()`, or `exit;` / `exit(`
+* **PHP lint** — Run `php -l` on each changed PHP file
+* **PHPStan** — Static analysis on changed PHP files
+* **Tests** — Full suite when `app/`, `routes/`, `config/`, etc. changed; otherwise only changed files under `tests/`
+* **API spec** — Generate OpenAPI spec when application code changed (or with `--full=true`)
 * **Composer audit** — Run `composer audit`
 * **npm audit** — Optional; runs when `package.json` exists and `--with-npm-audit=true`
 
@@ -145,7 +151,7 @@ Add to your project’s `composer.json` under `scripts` so you can run `composer
 ```shell
 cat > .git/hooks/pre-commit <<'EOF'
 #!/bin/sh
-exec ./vendor/bin/reviewer
+exec ./vendor/bin/reviewer --staged-only=true
 EOF
 chmod +x .git/hooks/pre-commit
 ```
@@ -170,15 +176,16 @@ All options accept `true`, `1`, `yes` or `false`, `0`, `no`. Defaults are `true`
 | `--composer-cmd`           | `composer` | Composer command (e.g. `composer`, `./vendor/bin/sail composer`)        |
 | `--npm-cmd`                | `npm`   | npm command (e.g. `npm`, `pnpm`)                                            |
 | `--auto-sail`              | `true`  | When `php`/`composer` defaults and `./vendor/bin/sail` is up, use Sail automatically |
-| `--with-pint`              | `true`  | Run Pint on staged PHP files and re-stage                                   |
-| `--with-dumps-check`       | `true`  | Check staged PHP files for dump/exit calls      |
-| `--with-php-lint`          | `true`  | Run `php -l` on staged PHP files                 |
-| `--with-phpstan`           | `true`  | Run PHPStan on staged PHP files                  |
-| `--with-tests`             | `true`  | Run test suite                                  |
+| `--staged-only`            | `false` | Only git-staged PHP files (`true` for pre-commit hooks) |
+| `--with-pint`              | `true`  | Run Pint on changed PHP files; re-stages when `--staged-only=true` |
+| `--with-dumps-check`       | `true`  | Check changed PHP files for dump/exit calls      |
+| `--with-php-lint`          | `true`  | Run `php -l` on changed PHP files                 |
+| `--with-phpstan`           | `true`  | Run PHPStan on changed PHP files                  |
+| `--with-tests`             | `true`  | Full suite if app code changed; else changed `tests/` files only |
 | `--with-composer-audit`    | `true`  | Run `composer audit`                             |
 | `--with-npm-audit`         | `false` | Run `npm audit` when `package.json` exists      |
-| `--with-api-spec`          | `true`  | Generate OpenAPI spec to `storage/app/private/api.json` (via the project's `vendor/bin/openapi` CLI) |
-| `--full`                  | `false` | Run Pint, dumps check, PHP lint, and PHPStan on the whole project (excl. vendor/node_modules) instead of staged files only; Pint is not re-staged |
+| `--with-api-spec`          | `true`  | Generate OpenAPI spec when app code changed (via `vendor/bin/openapi`) |
+| `--full`                  | `false` | Run file-based checks on the whole project; Pint is not re-staged |
 
 #### Examples
 

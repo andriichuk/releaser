@@ -277,7 +277,7 @@ if [[ "$WITH_PRE_COMMIT_HOOK" == true ]]; then
     # shellcheck disable=SC2016
     {
       printf '%s\n' '#!/bin/sh'
-      printf 'exec ./vendor/bin/reviewer'
+      printf 'exec ./vendor/bin/reviewer --staged-only=true'
       if [[ -n "$REVIEWER_HOOK_ARGS" ]]; then
         printf ' %s' "$REVIEWER_HOOK_ARGS"
       fi
