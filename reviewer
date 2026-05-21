@@ -14,7 +14,7 @@ WITH_PHPSTAN=true
 WITH_TESTS=true
 WITH_COMPOSER_AUDIT=true
 WITH_NPM_AUDIT=false
-WITH_API_SPEC=true
+WITH_API_SPEC=false
 FULL=false
 STAGED_ONLY=false
 AUTO_SAIL=true
@@ -43,7 +43,7 @@ usage() {
   printf '  --with-tests=BOOL       Run tests for changed test files, or full suite if app code changed (default: true)\n'
   printf '  --with-composer-audit=BOOL  Run composer audit (default: true)\n'
   printf '  --with-npm-audit=BOOL   Run npm audit if package.json exists (default: false)\n'
-  printf '  --with-api-spec=BOOL    Generate OpenAPI spec when app PHP files changed (default: true)\n'
+  printf '  --with-api-spec=BOOL    Generate OpenAPI spec when app PHP files changed (default: false; requires vendor/bin/openapi)\n'
   printf '  --full=BOOL             Run file-based checks on the whole project (default: false)\n'
   printf '  --help                  Show this help\n'
 }
@@ -398,8 +398,12 @@ if [[ "$WITH_TESTS" == true ]]; then
 fi
 
 if [[ "$WITH_API_SPEC" == true && ( "$FULL" == true || has_changed_app_code ) ]]; then
-  printf '\033[44mGenerating API Spec ...\033[0m\n'
-  run "${PHP_CMD} ./vendor/bin/openapi app -o storage/app/private/api.json -f json"
+  if [[ ! -f ./vendor/bin/openapi ]]; then
+    printf '\033[0;33mSkipping API spec: vendor/bin/openapi not found (install zircote/swagger-php or pass --with-api-spec=false).\033[0m\n'
+  else
+    printf '\033[44mGenerating API Spec ...\033[0m\n'
+    run "${PHP_CMD} ./vendor/bin/openapi app -o storage/app/private/api.json -f json"
+  fi
 fi
 
 if [[ "$WITH_COMPOSER_AUDIT" == true ]]; then

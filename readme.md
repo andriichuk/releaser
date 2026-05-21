@@ -184,7 +184,7 @@ All options accept `true`, `1`, `yes` or `false`, `0`, `no`. Defaults are `true`
 | `--with-tests`             | `true`  | Full suite if app code changed; else changed `tests/` files only |
 | `--with-composer-audit`    | `true`  | Run `composer audit`                             |
 | `--with-npm-audit`         | `false` | Run `npm audit` when `package.json` exists      |
-| `--with-api-spec`          | `true`  | Generate OpenAPI spec when app code changed (via `vendor/bin/openapi`) |
+| `--with-api-spec`          | `false` | Generate OpenAPI spec when app code changed (requires `vendor/bin/openapi`) |
 | `--full`                  | `false` | Run file-based checks on the whole project; Pint is not re-staged |
 
 #### Examples
