@@ -163,11 +163,26 @@ if git rev-parse --verify "$MAIN_DEV_BRANCH" >/dev/null 2>&1; then
 else
   run "git switch -c ${MAIN_DEV_BRANCH}" || run "git checkout -b ${MAIN_DEV_BRANCH}" || fail "Failed to create/switch to ${MAIN_DEV_BRANCH}"
 fi
-run "git pull ${GIT_REMOTE} ${MAIN_DEV_BRANCH}" || fail "Failed to pull ${MAIN_DEV_BRANCH} from ${GIT_REMOTE}"
+# Only pull when the branch exists on the remote. A single-branch repo (or one whose dev
+# branch does not exist yet) would otherwise hard-fail on the pull we just created locally.
+if git ls-remote --exit-code --heads "${GIT_REMOTE}" "${MAIN_DEV_BRANCH}" >/dev/null 2>&1; then
+  run "git pull ${GIT_REMOTE} ${MAIN_DEV_BRANCH}" || fail "Failed to pull ${MAIN_DEV_BRANCH} from ${GIT_REMOTE}"
+else
+  info "Branch ${MAIN_DEV_BRANCH} does not exist on ${GIT_REMOTE} yet, skipping pull."
+fi
 
 if [[ "$WITH_TESTS" == true ]]; then
   info "Running tests"
-  run "${PHP_CMD} artisan test --compact" || fail "Tests failed"
+  # Package repos have no artisan, so fall back to the test runner that is actually present.
+  if [ -f artisan ]; then
+    run "${PHP_CMD} artisan test --compact" || fail "Tests failed"
+  elif [ -x vendor/bin/pest ]; then
+    run "${PHP_CMD} vendor/bin/pest" || fail "Tests failed"
+  elif [ -x vendor/bin/phpunit ]; then
+    run "${PHP_CMD} vendor/bin/phpunit" || fail "Tests failed"
+  else
+    fail "No test runner found (artisan, vendor/bin/pest, vendor/bin/phpunit). Pass --with-tests=false to skip."
+  fi
 fi
 
 if [[ "$WITH_COMPOSER_AUDIT" == true ]]; then

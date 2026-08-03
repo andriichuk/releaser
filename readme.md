@@ -91,7 +91,7 @@ With Laravel Sail, use a script that passes the same flags as in the shell examp
 | `--release-branch-prefix`        | `release/`             | Prefix for release branches                                                                                                             |
 | `--with-app-version-update`      | `false`                | Whether to update application version in `config/app.php` file. Please note that the file must exists and contain the `'version'` key.  |
 | `--post-release-update-branches` | `$main-dev-branch`     | Comma-separated list of branches to update after release (e.g. `develop,stage`, by default value from `--main-dev-branch` will be used) |
-| `--with-tests`                   | `true`                 | Whether to run tests before creating a release                                                                                          |
+| `--with-tests`                   | `true`                 | Whether to run tests before creating a release. Runner is auto-detected: `artisan test` when `artisan` exists, else `vendor/bin/pest`, else `vendor/bin/phpunit`  |
 | `--with-composer-audit`          | `true`                 | Whether to run `composer audit` before creating a release                                                                               |
 | `--commit-msg-template`          | `Release v{{version}}` | Template for the commit message after making any changes in the release branch (only `{{version}}` placeholder supported)                |
 
