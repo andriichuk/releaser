@@ -307,29 +307,36 @@ All boolean options accept `true`, `1`, `yes` or `false`, `0`, `no`. Defaults ar
 
 ## Installer
 
-The `installer` script runs a one-shot local [Laravel Sail](https://laravel.com/docs/sail) bootstrap from the **project root** (directory containing `artisan`). It checks out your development branch, copies `.env`, installs Composer dependencies via Docker (so `./vendor/bin/sail` exists), starts Sail, runs common Artisan steps, optionally updates `/etc/hosts`, and writes a Git pre-commit hook that runs **[Reviewer](#reviewer)** with Sail-friendly `--php-cmd` / `--composer-cmd` defaults.
+The `installer` script runs a one-shot local [Laravel Sail](https://laravel.com/docs/sail) bootstrap from the **project root** (directory containing `artisan`). It checks out your development branch, copies `.env`, installs Composer dependencies via Docker (so `./vendor/bin/sail` exists), starts Sail, runs the Artisan and npm steps a Laravel app needs before it will serve a page, optionally updates `/etc/hosts`, writes a Git pre-commit hook that runs **[Reviewer](#reviewer)**, and finishes by requesting `APP_URL` so a half-finished install is visible instead of silent.
 
 **Steps (each can be toggled via options):**
 
+* **Preflight** — refuse to start on a dirty working tree when a checkout is due (`--allow-dirty=true` overrides)
 * **Git** — `git checkout` on the main development branch (default `develop`)
-* **Env** — `cp .env.example .env` (skipped if `.env` already exists unless `--force-env=true`)
+* **Env** — `cp .env.example .env` (skipped if `.env` already exists unless `--force-env=true`, which backs the old file up first)
+* **Ownership** — write the current `id -u` / `id -g` into `WWWUSER` / `WWWGROUP` so Sail's bind mounts are writable
 * **Composer** — `docker run` with the Laravel Sail Composer image, `composer install` (optional `--ignore-platform-reqs`, default on)
 * **Sail** — `./vendor/bin/sail up -d` by default so the script can continue (see Caveats)
-* **Artisan** — `key:generate`; `migrate --seed` (optional)
-* **Hosts** — append one line to `/etc/hosts` via `sudo` (optional; skipped if the line is already present)
+* **Artisan** — `key:generate` (skipped when `APP_KEY` is already set); `migrate --seed` (optional)
+* **npm** — `npm install`, and `npm run build` on request; both skipped when there is no `package.json`
+* **Project commands** — any `--extra-artisan` commands, run after migrations and `npm install`
+* **Hosts** — append one line to `/etc/hosts` via `sudo` (optional; skipped when every hostname on the line already resolves)
 * **IDE Helper** — `ide-helper:generate` and `ide-helper:meta` (optional, default off)
-* **OpenAPI** — `sail php ./vendor/bin/openapi app -o storage/app/private/api.json -f json` (optional)
+* **OpenAPI** — `sail php ./vendor/bin/openapi <source> -o <output> -f json` (optional)
 * **Storage** — `storage:link` (optional)
-* **Pre-commit** — `.git/hooks/pre-commit` with `exec ./vendor/bin/reviewer ...` (same pattern as the [wrapper example](#reviewer) in Reviewer; optional)
+* **Pre-commit** — `.git/hooks/pre-commit` with `exec ./vendor/bin/reviewer ...`; an existing hook is backed up first (optional)
+* **Report** — list any `--require-env` keys still blank, then request `APP_URL` and report the status code
 
-If `.git` is missing, git checkout and the pre-commit hook are skipped with a short message.
+If `.git` is missing, git checkout and the pre-commit hook are skipped with a short message. A failure at any step names the step it died on rather than exiting silently.
+
+#### Choosing the Composer image
+
+By default the image is derived from `require.php` in your `composer.json`: `"^8.5"` asks for `laravelsail/php85-composer:latest`. Sail only publishes a Composer image once a PHP version ships, so when that tag does not exist the installer steps down a minor at a time until it finds one that does — `--ignore-platform-reqs` is on by default, so resolving with an older Composer container is harmless. Pass `--composer-docker-image=` to pin one explicitly, or `--with-php-image-detect=false` to fall back to the built-in default.
 
 #### Usage
 
 ```shell
-./vendor/bin/installer \
-  --main-dev-branch=develop \
-  --composer-docker-image=laravelsail/php84-composer:latest
+./vendor/bin/installer --main-dev-branch=develop
 ```
 
 Add to your project’s `composer.json` under `scripts` so you can run `composer install-local` (or another name you prefer):
@@ -349,24 +356,38 @@ All boolean options accept `true`, `1`, `yes` or `false`, `0`, `no`. Defaults ar
 | Argument                         | Default                              | Description |
 |----------------------------------|--------------------------------------|-------------|
 | `--main-dev-branch`              | `develop`                            | Branch to check out when `--with-git-checkout=true` |
-| `--force-env`                    | `false`                              | Overwrite `.env` from `.env.example` if `.env` exists |
-| `--composer-docker-image`        | `laravelsail/php84-composer:latest`  | Docker image for `composer install` |
+| `--allow-dirty`                  | `false`                              | Continue when the working tree has uncommitted changes |
+| `--force-env`                    | `false`                              | Overwrite `.env` from `.env.example`; the old file is copied to `.env.backup.<timestamp>` |
+| `--composer-docker-image`        | *(detected)*                         | Docker image for `composer install`; overrides detection |
+| `--with-php-image-detect`        | `true`                               | Derive the Composer image from `composer.json` `require.php` |
 | `--with-ignore-platform-reqs`    | `true`                               | Pass `--ignore-platform-reqs` to Composer |
 | `--composer-install-extra-args`  | *(empty)*                            | Extra tokens appended to `composer install` (space-separated) |
-| `--sail-bin`                     | `./vendor/bin/sail`                  | Sail script path (used for Artisan, OpenAPI, and hook `reviewer` args) |
-| `--sail-detached`                | `true`                               | Run `sail up -d`. If `false`, you must use `--skip-sail-up=true` and start Sail yourself first |
+| `--sail-bin`                     | `./vendor/bin/sail`                  | Sail script path (used for Artisan, npm, OpenAPI) |
+| `--sail-detached`                | `true`                               | Deprecated. Only `true` is supported; use `--skip-sail-up=true` instead |
 | `--skip-sail-up`                 | `false`                              | Do not run `sail up` (containers already running) |
+| `--npm-cmd`                      | `<sail-bin> npm`                     | npm command |
+| `--with-npm-install`             | `true`                               | Run `npm install` when `package.json` exists |
+| `--with-npm-build`               | `false`                              | Run `npm run build` after installing |
+| `--extra-artisan`                | *(empty)*                            | Extra Artisan command to run after migrations; repeat the flag for more than one |
 | `--with-git-checkout`            | `true`                               | Run `git checkout` on `--main-dev-branch` |
 | `--with-hosts`                   | `true`                               | Append `--hosts-line` to `/etc/hosts` |
-| `--hosts-line`                   | `127.0.0.1 project.test`           | Line appended to `/etc/hosts` |
+| `--hosts-line`                   | `127.0.0.1 project.test`             | Line appended to `/etc/hosts` |
+| `--with-www-user`                | `true`                               | Write `id -u` / `id -g` into `WWWUSER` / `WWWGROUP` in `.env` |
 | `--with-ide-helper`              | `false`                              | Run IDE Helper Artisan commands |
-| `--with-openapi`                 | `true`                               | Generate OpenAPI JSON under `storage/app/private/api.json` |
+| `--with-openapi`                 | `true`                               | Generate the OpenAPI document |
+| `--openapi-source`               | `app`                                | Directory scanned for OpenAPI attributes |
+| `--openapi-output`               | `storage/app/private/api.json`       | OpenAPI output path |
 | `--with-migrate-seed`            | `true`                               | Run `migrate --seed` |
 | `--with-storage-link`            | `true`                               | Run `storage:link` |
+| `--with-key-generate`            | `true`                               | Run `key:generate` when `APP_KEY` is empty |
+| `--force-key`                    | `false`                              | Regenerate `APP_KEY` even when one is set |
 | `--with-pre-commit-hook`         | `true`                               | Write `.git/hooks/pre-commit` to `exec` `reviewer` |
 | `--reviewer-hook-args`           | *(empty)*                            | Extra arguments appended to `reviewer` in the hook (e.g. `--with-tests=false`) |
+| `--require-env`                  | *(empty)*                            | Comma-separated `.env` keys reported as blank when finished (names only, never values) |
+| `--with-verify`                  | `true`                               | Request `APP_URL` when finished and report the status code |
+| `--dry-run`                      | `false`                              | Print every step without executing or writing anything |
 
-**Caveats:** The installer runs `sail up -d` by default so later Artisan steps are reachable in the same run. A blocking `sail up` would stop the script; use `--skip-sail-up=true` if you start Sail in another terminal first. The first `migrate --seed` can fail if the database container is not ready yet—run migrations again after Sail is healthy. Updating `/etc/hosts` requires `sudo`. IDE Helper requires the `barryvdh/laravel-ide-helper` package. OpenAPI generation requires your project’s `vendor/bin/openapi` CLI. For hook behavior and skipping checks on a single commit, see **[Reviewer](#reviewer)** (`git commit --no-verify`).
+**Caveats:** The installer runs `sail up -d` by default so later steps are reachable in the same run. A blocking `sail up` would stop the script; use `--skip-sail-up=true` if you start Sail in another terminal first. Updating `/etc/hosts` requires `sudo`. IDE Helper requires the `barryvdh/laravel-ide-helper` package. OpenAPI generation requires your project’s `vendor/bin/openapi` CLI. `key:generate` is skipped when `APP_KEY` is already set, because rotating it invalidates existing encrypted columns and sessions. For hook behavior and skipping checks on a single commit, see **[Reviewer](#reviewer)** (`git commit --no-verify`).
 
 #### Examples
 
@@ -374,8 +395,14 @@ All boolean options accept `true`, `1`, `yes` or `false`, `0`, `no`. Defaults ar
 # Full local bootstrap (defaults)
 ./vendor/bin/installer
 
-# Custom dev branch and hosts entry
-./vendor/bin/installer --main-dev-branch=feature/x --hosts-line="127.0.0.1 myapp.test"
+# See exactly what would happen, change nothing
+./vendor/bin/installer --dry-run=true
+
+# Inertia/React app: custom hostname, route helpers, and a report of missing secrets
+./vendor/bin/installer \
+  --hosts-line="127.0.0.1 myapp.test" \
+  --extra-artisan="panel:wayfinder" \
+  --require-env="STRIPE_SECRET,MAIL_MAILER"
 
 # Skip hosts and OpenAPI; enable IDE Helper
 ./vendor/bin/installer --with-hosts=false --with-openapi=false --with-ide-helper=true
@@ -551,7 +578,7 @@ Copy the `scripts` block below into your project’s `composer.json` (merge with
 }
 ```
 
-**Laravel Sail** — same commands with Sail-friendly `php` / `composer` / `npm` wrappers where applicable (`installer` is unchanged; it uses Docker for Composer as documented):
+**Laravel Sail** — same commands with Sail-friendly `php` / `composer` / `npm` wrappers where applicable. `installer` needs no wrapper flags: it uses Docker for Composer and `--sail-bin` for everything else. Give it your hostname and whatever project-specific Artisan steps the app needs before it will serve a page:
 
 ```json
 {
@@ -559,7 +586,7 @@ Copy the `scripts` block below into your project’s `composer.json` (merge with
         "release": "vendor/bin/releaser --php-cmd='./vendor/bin/sail php' --composer-cmd='./vendor/bin/sail composer' --main-branch=main --main-dev-branch=develop",
         "review": "vendor/bin/reviewer",
         "deploy": "vendor/bin/deployer --php='./vendor/bin/sail php'",
-        "install-local": "vendor/bin/installer",
+        "install-local": "vendor/bin/installer --hosts-line='127.0.0.1 project.test' --extra-artisan='wayfinder:generate'",
         "spark": "vendor/bin/spark --php-cmd='./vendor/bin/sail php' --composer-cmd='./vendor/bin/sail composer' --npm-cmd='./vendor/bin/sail npm' --main-dev-branch=develop --feature-branch-prefix=feature/",
         "rescue": "vendor/bin/rescue --php-cmd='./vendor/bin/sail php' --composer-cmd='./vendor/bin/sail composer' --npm-cmd='./vendor/bin/sail npm' --main-dev-branch=develop --bugfix-branch-prefix=bugfix/"
     }

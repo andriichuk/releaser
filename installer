@@ -1,26 +1,50 @@
 #!/usr/bin/env bash
-set -e
+set -Eeuo pipefail
 
 ############################################
 # Defaults (can be overridden by CLI args)
 ############################################
 MAIN_DEV_BRANCH="develop"
 FORCE_ENV=false
-COMPOSER_DOCKER_IMAGE="laravelsail/php84-composer:latest"
+ALLOW_DIRTY=false
+COMPOSER_DOCKER_IMAGE=""
+COMPOSER_DOCKER_IMAGE_FALLBACK="laravelsail/php84-composer:latest"
+WITH_PHP_IMAGE_DETECT=true
 WITH_IGNORE_PLATFORM_REQS=true
 COMPOSER_INSTALL_EXTRA_ARGS=""
 SAIL_BIN="./vendor/bin/sail"
 SAIL_DETACHED=true
 SKIP_SAIL_UP=false
+NPM_CMD=""
+WITH_NPM_INSTALL=true
+WITH_NPM_BUILD=false
 WITH_GIT_CHECKOUT=true
 WITH_HOSTS=true
 HOSTS_LINE="127.0.0.1 project.test"
+WITH_WWW_USER=true
 WITH_IDE_HELPER=false
 WITH_OPENAPI=true
+OPENAPI_SOURCE="app"
+OPENAPI_OUTPUT="storage/app/private/api.json"
 WITH_MIGRATE_SEED=true
 WITH_STORAGE_LINK=true
+WITH_KEY_GENERATE=true
+FORCE_KEY=false
 WITH_PRE_COMMIT_HOOK=true
 REVIEWER_HOOK_ARGS=""
+REQUIRE_ENV=""
+WITH_VERIFY=true
+DRY_RUN=false
+EXTRA_ARTISAN=()
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+CYAN='\033[0;36m'
+BLUE='\033[44m'
+RESET='\033[0m'
+
+CURRENT_STEP="startup"
 
 parse_bool() {
   case "$1" in
@@ -32,25 +56,39 @@ parse_bool() {
 
 usage() {
   printf 'Usage: %s [OPTIONS]\n' "${0##*/}"
-  printf '\nLocal Laravel + Sail bootstrap: git branch, .env, composer (Docker), Sail, Artisan, optional hosts, hook.\n'
+  printf '\nLocal Laravel + Sail bootstrap: git branch, .env, composer (Docker), Sail, Artisan, npm, hosts, hook.\n'
   printf '\nOptions:\n'
   printf '  --main-dev-branch=BRANCH   Development branch to checkout (default: develop)\n'
-  printf '  --force-env=BOOL         Overwrite .env from .env.example if .env exists (default: false)\n'
-  printf '  --composer-docker-image=IMAGE  Image for composer install (default: laravelsail/php84-composer:latest)\n'
+  printf '  --allow-dirty=BOOL       Continue when the working tree has uncommitted changes (default: false)\n'
+  printf '  --force-env=BOOL         Overwrite .env from .env.example if .env exists (default: false; backs the old one up)\n'
+  printf '  --composer-docker-image=IMAGE  Image for composer install (default: detected from composer.json)\n'
+  printf '  --with-php-image-detect=BOOL  Derive the Composer image from composer.json require.php (default: true)\n'
   printf '  --with-ignore-platform-reqs=BOOL  Pass --ignore-platform-reqs to composer install (default: true)\n'
   printf '  --composer-install-extra-args=ARGS  Extra args appended to composer install (quoted string)\n'
   printf '  --sail-bin=PATH          Sail script path (default: ./vendor/bin/sail)\n'
-  printf '  --sail-detached=BOOL     Run sail up -d (default: true). If false, use --skip-sail-up after starting Sail manually.\n'
+  printf '  --sail-detached=BOOL     Deprecated. Only true is supported; use --skip-sail-up=true instead\n'
   printf '  --skip-sail-up=BOOL      Do not run sail up (containers already running) (default: false)\n'
+  printf '  --npm-cmd=CMD            npm command (default: "<sail-bin> npm")\n'
+  printf '  --with-npm-install=BOOL  Run npm install when package.json exists (default: true)\n'
+  printf '  --with-npm-build=BOOL    Run npm run build after installing (default: false)\n'
+  printf '  --extra-artisan=CMD      Extra artisan command to run after migrations; repeatable\n'
   printf '  --with-git-checkout=BOOL Run git checkout on main-dev-branch (default: true)\n'
   printf '  --with-hosts=BOOL        Append hosts line via sudo tee (default: true)\n'
   printf '  --hosts-line=LINE        Line to add to /etc/hosts (default: 127.0.0.1 project.test)\n'
+  printf '  --with-www-user=BOOL     Write the current uid/gid into WWWUSER/WWWGROUP in .env (default: true)\n'
   printf '  --with-ide-helper=BOOL   Run ide-helper:generate and ide-helper:meta (default: false)\n'
-  printf '  --with-openapi=BOOL      Generate OpenAPI to storage/app/private/api.json (default: true)\n'
+  printf '  --with-openapi=BOOL      Generate the OpenAPI document (default: true)\n'
+  printf '  --openapi-source=DIR     Directory scanned for OpenAPI attributes (default: app)\n'
+  printf '  --openapi-output=PATH    OpenAPI output path (default: storage/app/private/api.json)\n'
   printf '  --with-migrate-seed=BOOL Run migrate --seed (default: true)\n'
   printf '  --with-storage-link=BOOL Run storage:link (default: true)\n'
+  printf '  --with-key-generate=BOOL Run key:generate when APP_KEY is empty (default: true)\n'
+  printf '  --force-key=BOOL         Regenerate APP_KEY even when one is already set (default: false)\n'
   printf '  --with-pre-commit-hook=BOOL  Write .git/hooks/pre-commit to exec reviewer (default: true)\n'
   printf '  --reviewer-hook-args=ARGS    Extra args for reviewer in the hook (e.g. --with-tests=false)\n'
+  printf '  --require-env=LIST       Comma-separated .env keys to report as blank when finished\n'
+  printf '  --with-verify=BOOL       Request APP_URL when finished and report the status (default: true)\n'
+  printf '  --dry-run=BOOL           Print the steps without changing anything (default: false)\n'
   printf '  --help                   Show this help\n'
 }
 
@@ -65,23 +103,37 @@ for arg in "$@"; do
       ;;
     --main-dev-branch=*)
       MAIN_DEV_BRANCH="${arg#*=}"
-      [[ -n "$MAIN_DEV_BRANCH" ]] || { printf '\033[0;31m--main-dev-branch= requires a non-empty value\033[0m\n' >&2; exit 1; }
+      [[ -n "$MAIN_DEV_BRANCH" ]] || { printf "${RED}--main-dev-branch= requires a non-empty value${RESET}\n" >&2; exit 1; }
+      ;;
+    --allow-dirty=*)
+      VALUE="${arg#*=}"
+      if ! ALLOW_DIRTY=$(parse_bool "$VALUE"); then
+        printf "${RED}Invalid boolean: %s${RESET}\n" "$VALUE" >&2
+        exit 1
+      fi
       ;;
     --force-env=*)
       VALUE="${arg#*=}"
       if ! FORCE_ENV=$(parse_bool "$VALUE"); then
-        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        printf "${RED}Invalid boolean: %s${RESET}\n" "$VALUE" >&2
         exit 1
       fi
       ;;
     --composer-docker-image=*)
       COMPOSER_DOCKER_IMAGE="${arg#*=}"
-      [[ -n "$COMPOSER_DOCKER_IMAGE" ]] || { printf '\033[0;31m--composer-docker-image= requires a non-empty value\033[0m\n' >&2; exit 1; }
+      [[ -n "$COMPOSER_DOCKER_IMAGE" ]] || { printf "${RED}--composer-docker-image= requires a non-empty value${RESET}\n" >&2; exit 1; }
+      ;;
+    --with-php-image-detect=*)
+      VALUE="${arg#*=}"
+      if ! WITH_PHP_IMAGE_DETECT=$(parse_bool "$VALUE"); then
+        printf "${RED}Invalid boolean: %s${RESET}\n" "$VALUE" >&2
+        exit 1
+      fi
       ;;
     --with-ignore-platform-reqs=*)
       VALUE="${arg#*=}"
       if ! WITH_IGNORE_PLATFORM_REQS=$(parse_bool "$VALUE"); then
-        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        printf "${RED}Invalid boolean: %s${RESET}\n" "$VALUE" >&2
         exit 1
       fi
       ;;
@@ -90,80 +142,149 @@ for arg in "$@"; do
       ;;
     --sail-bin=*)
       SAIL_BIN="${arg#*=}"
-      [[ -n "$SAIL_BIN" ]] || { printf '\033[0;31m--sail-bin= requires a non-empty value\033[0m\n' >&2; exit 1; }
+      [[ -n "$SAIL_BIN" ]] || { printf "${RED}--sail-bin= requires a non-empty value${RESET}\n" >&2; exit 1; }
       ;;
     --sail-detached=*)
       VALUE="${arg#*=}"
       if ! SAIL_DETACHED=$(parse_bool "$VALUE"); then
-        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        printf "${RED}Invalid boolean: %s${RESET}\n" "$VALUE" >&2
         exit 1
       fi
       ;;
     --skip-sail-up=*)
       VALUE="${arg#*=}"
       if ! SKIP_SAIL_UP=$(parse_bool "$VALUE"); then
-        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        printf "${RED}Invalid boolean: %s${RESET}\n" "$VALUE" >&2
         exit 1
       fi
+      ;;
+    --npm-cmd=*)
+      NPM_CMD="${arg#*=}"
+      [[ -n "$NPM_CMD" ]] || { printf "${RED}--npm-cmd= requires a non-empty value${RESET}\n" >&2; exit 1; }
+      ;;
+    --with-npm-install=*)
+      VALUE="${arg#*=}"
+      if ! WITH_NPM_INSTALL=$(parse_bool "$VALUE"); then
+        printf "${RED}Invalid boolean: %s${RESET}\n" "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --with-npm-build=*)
+      VALUE="${arg#*=}"
+      if ! WITH_NPM_BUILD=$(parse_bool "$VALUE"); then
+        printf "${RED}Invalid boolean: %s${RESET}\n" "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --extra-artisan=*)
+      VALUE="${arg#*=}"
+      [[ -n "$VALUE" ]] || { printf "${RED}--extra-artisan= requires a non-empty value${RESET}\n" >&2; exit 1; }
+      EXTRA_ARTISAN+=("$VALUE")
       ;;
     --with-git-checkout=*)
       VALUE="${arg#*=}"
       if ! WITH_GIT_CHECKOUT=$(parse_bool "$VALUE"); then
-        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        printf "${RED}Invalid boolean: %s${RESET}\n" "$VALUE" >&2
         exit 1
       fi
       ;;
     --with-hosts=*)
       VALUE="${arg#*=}"
       if ! WITH_HOSTS=$(parse_bool "$VALUE"); then
-        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        printf "${RED}Invalid boolean: %s${RESET}\n" "$VALUE" >&2
         exit 1
       fi
       ;;
     --hosts-line=*)
       HOSTS_LINE="${arg#*=}"
-      [[ -n "$HOSTS_LINE" ]] || { printf '\033[0;31m--hosts-line= requires a non-empty value\033[0m\n' >&2; exit 1; }
+      [[ -n "$HOSTS_LINE" ]] || { printf "${RED}--hosts-line= requires a non-empty value${RESET}\n" >&2; exit 1; }
+      ;;
+    --with-www-user=*)
+      VALUE="${arg#*=}"
+      if ! WITH_WWW_USER=$(parse_bool "$VALUE"); then
+        printf "${RED}Invalid boolean: %s${RESET}\n" "$VALUE" >&2
+        exit 1
+      fi
       ;;
     --with-ide-helper=*)
       VALUE="${arg#*=}"
       if ! WITH_IDE_HELPER=$(parse_bool "$VALUE"); then
-        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        printf "${RED}Invalid boolean: %s${RESET}\n" "$VALUE" >&2
         exit 1
       fi
       ;;
     --with-openapi=*)
       VALUE="${arg#*=}"
       if ! WITH_OPENAPI=$(parse_bool "$VALUE"); then
-        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        printf "${RED}Invalid boolean: %s${RESET}\n" "$VALUE" >&2
         exit 1
       fi
+      ;;
+    --openapi-source=*)
+      OPENAPI_SOURCE="${arg#*=}"
+      [[ -n "$OPENAPI_SOURCE" ]] || { printf "${RED}--openapi-source= requires a non-empty value${RESET}\n" >&2; exit 1; }
+      ;;
+    --openapi-output=*)
+      OPENAPI_OUTPUT="${arg#*=}"
+      [[ -n "$OPENAPI_OUTPUT" ]] || { printf "${RED}--openapi-output= requires a non-empty value${RESET}\n" >&2; exit 1; }
       ;;
     --with-migrate-seed=*)
       VALUE="${arg#*=}"
       if ! WITH_MIGRATE_SEED=$(parse_bool "$VALUE"); then
-        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        printf "${RED}Invalid boolean: %s${RESET}\n" "$VALUE" >&2
         exit 1
       fi
       ;;
     --with-storage-link=*)
       VALUE="${arg#*=}"
       if ! WITH_STORAGE_LINK=$(parse_bool "$VALUE"); then
-        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        printf "${RED}Invalid boolean: %s${RESET}\n" "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --with-key-generate=*)
+      VALUE="${arg#*=}"
+      if ! WITH_KEY_GENERATE=$(parse_bool "$VALUE"); then
+        printf "${RED}Invalid boolean: %s${RESET}\n" "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --force-key=*)
+      VALUE="${arg#*=}"
+      if ! FORCE_KEY=$(parse_bool "$VALUE"); then
+        printf "${RED}Invalid boolean: %s${RESET}\n" "$VALUE" >&2
         exit 1
       fi
       ;;
     --with-pre-commit-hook=*)
       VALUE="${arg#*=}"
       if ! WITH_PRE_COMMIT_HOOK=$(parse_bool "$VALUE"); then
-        printf '\033[0;31mInvalid boolean: %s\033[0m\n' "$VALUE" >&2
+        printf "${RED}Invalid boolean: %s${RESET}\n" "$VALUE" >&2
         exit 1
       fi
       ;;
     --reviewer-hook-args=*)
       REVIEWER_HOOK_ARGS="${arg#*=}"
       ;;
+    --require-env=*)
+      REQUIRE_ENV="${arg#*=}"
+      ;;
+    --with-verify=*)
+      VALUE="${arg#*=}"
+      if ! WITH_VERIFY=$(parse_bool "$VALUE"); then
+        printf "${RED}Invalid boolean: %s${RESET}\n" "$VALUE" >&2
+        exit 1
+      fi
+      ;;
+    --dry-run=*)
+      VALUE="${arg#*=}"
+      if ! DRY_RUN=$(parse_bool "$VALUE"); then
+        printf "${RED}Invalid boolean: %s${RESET}\n" "$VALUE" >&2
+        exit 1
+      fi
+      ;;
     *)
-      printf '\033[0;31mUnknown argument: %s\033[0m\n' "$arg" >&2
+      printf "${RED}Unknown argument: %s${RESET}\n" "$arg" >&2
       exit 1
       ;;
   esac
@@ -172,43 +293,163 @@ done
 ############################################
 # Helpers
 ############################################
+trap 'printf "${RED}✖ Failed during: %s${RESET}\n" "$CURRENT_STEP" >&2' ERR
+
+step() {
+  CURRENT_STEP="$1"
+  printf "${BLUE}%s${RESET}\n" "$1"
+}
+
+info() {
+  printf "${GREEN}→ %s${RESET}\n" "$1"
+}
+
+warn() {
+  printf "${YELLOW}%s${RESET}\n" "$1"
+}
+
+fail() {
+  printf "${RED}✖ %s${RESET}\n" "$1" >&2
+  exit 1
+}
+
+run() {
+  printf "${YELLOW}+ %s${RESET}\n" "$*"
+  if [[ "$DRY_RUN" == true ]]; then
+    return 0
+  fi
+  "$@"
+}
+
 run_sail() {
-  "$SAIL_BIN" "$@"
+  run "$SAIL_BIN" "$@"
 }
 
 run_sail_artisan() {
-  "$SAIL_BIN" artisan "$@"
+  run "$SAIL_BIN" artisan "$@"
 }
+
+run_npm() {
+  local npm_args
+  read -r -a npm_args <<< "$NPM_CMD"
+  run "${npm_args[@]}" "$@"
+}
+
+# Reads a key from .env without sourcing it: values may contain spaces, quotes or `#`.
+env_value() {
+  local key="$1"
+  [[ -f .env ]] || return 0
+  sed -n "s/^${key}=//p" .env | head -1 | sed -e 's/^"//' -e 's/"$//'
+}
+
+set_env_value() {
+  local key="$1" value="$2"
+  if [[ "$DRY_RUN" == true ]]; then
+    printf "${YELLOW}+ set %s=%s in .env${RESET}\n" "$key" "$value"
+    return 0
+  fi
+  if grep -qE "^${key}=" .env; then
+    sed -i.installer.bak "s|^${key}=.*|${key}=${value}|" .env
+    rm -f .env.installer.bak
+  else
+    printf '%s=%s\n' "$key" "$value" >> .env
+  fi
+}
+
+image_available() {
+  docker image inspect "$1" > /dev/null 2>&1 && return 0
+  docker manifest inspect "$1" > /dev/null 2>&1
+}
+
+# `^8.5` and `>=8.1` both yield the first `major.minor` pair, so the image tracks the project's
+# own floor rather than whatever the toolkit was last pinned to. Sail publishes a Composer image
+# only once a PHP version ships, and `--ignore-platform-reqs` makes an older one harmless, so an
+# unpublished tag steps down instead of failing the install.
+detect_composer_image() {
+  [[ -f composer.json ]] || return 1
+  local constraint version major minor candidate
+  constraint=$(grep -m1 -E '"php"[[:space:]]*:[[:space:]]*"' composer.json | sed -E 's/.*"php"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/') || return 1
+  [[ -n "$constraint" ]] || return 1
+  version=$(printf '%s' "$constraint" | grep -oE '[0-9]+\.[0-9]+' | head -1) || return 1
+  [[ -n "$version" ]] || return 1
+  major="${version%%.*}"
+  minor="${version##*.}"
+  while [[ "$minor" -ge 0 ]]; do
+    candidate="laravelsail/php${major}${minor}-composer:latest"
+    if image_available "$candidate"; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+    minor=$((minor - 1))
+  done
+  return 1
+}
+
+############################################
+# Preflight
+############################################
+if [[ ! -f artisan ]]; then
+  fail "Run from project root (directory containing artisan)."
+fi
+
+if [[ "$DRY_RUN" == true ]]; then
+  warn "Dry run: no command will be executed and no file will be written."
+fi
+
+if [[ -z "$NPM_CMD" ]]; then
+  NPM_CMD="$SAIL_BIN npm"
+fi
+
+if [[ "$WITH_GIT_CHECKOUT" == true && -d .git && "$ALLOW_DIRTY" != true ]]; then
+  if ! git diff --quiet || ! git diff --staged --quiet; then
+    fail "Working tree has uncommitted changes; checking out ${MAIN_DEV_BRANCH} would abort mid-install. Commit or stash first, or pass --allow-dirty=true."
+  fi
+fi
 
 ############################################
 # Install steps
 ############################################
-if [[ ! -f artisan ]]; then
-  printf '\033[0;31mRun from project root (directory containing artisan).\033[0m\n' >&2
-  exit 1
-fi
-
 if [[ "$WITH_GIT_CHECKOUT" == true ]]; then
   if [[ ! -d .git ]]; then
-    printf '\033[0;33mSkipping git checkout: no .git directory.\033[0m\n'
+    warn "Skipping git checkout: no .git directory."
   else
-    printf '\033[44mChecking out branch %s...\033[0m\n' "$MAIN_DEV_BRANCH"
-    git checkout "$MAIN_DEV_BRANCH"
+    step "Checking out branch ${MAIN_DEV_BRANCH}..."
+    run git checkout "$MAIN_DEV_BRANCH"
   fi
 fi
 
+step "Preparing .env..."
 if [[ -f .env ]] && [[ "$FORCE_ENV" != true ]]; then
-  printf '\033[0;33mSkipping .env copy: .env already exists (use --force-env=true to overwrite).\033[0m\n'
+  warn "Skipping .env copy: .env already exists (use --force-env=true to overwrite)."
 else
   if [[ ! -f .env.example ]]; then
-    printf '\033[0;31m.env.example not found; cannot create .env.\033[0m\n' >&2
-    exit 1
+    fail ".env.example not found; cannot create .env."
   fi
-  printf '\033[44mCreating .env from .env.example...\033[0m\n'
-  cp .env.example .env
+  if [[ -f .env ]]; then
+    ENV_BACKUP=".env.backup.$(date +%Y%m%d%H%M%S)"
+    info "Backing the existing .env up to ${ENV_BACKUP} — it may hold credentials."
+    run cp .env "$ENV_BACKUP"
+  fi
+  info "Creating .env from .env.example"
+  run cp .env.example .env
 fi
 
-printf '\033[44mInstalling Composer dependencies (Docker)...\033[0m\n'
+if [[ "$WITH_WWW_USER" == true ]]; then
+  step "Aligning WWWUSER/WWWGROUP with the current user..."
+  set_env_value WWWUSER "$(id -u)"
+  set_env_value WWWGROUP "$(id -g)"
+fi
+
+step "Installing Composer dependencies (Docker)..."
+if [[ -z "$COMPOSER_DOCKER_IMAGE" ]]; then
+  if [[ "$WITH_PHP_IMAGE_DETECT" == true ]] && COMPOSER_DOCKER_IMAGE=$(detect_composer_image); then
+    info "Using Composer image ${COMPOSER_DOCKER_IMAGE} (derived from composer.json)"
+  else
+    COMPOSER_DOCKER_IMAGE="$COMPOSER_DOCKER_IMAGE_FALLBACK"
+    warn "Could not derive the PHP version from composer.json; using ${COMPOSER_DOCKER_IMAGE}."
+  fi
+fi
+
 COMPOSER_ARGS=(install)
 if [[ "$WITH_IGNORE_PLATFORM_REQS" == true ]]; then
   COMPOSER_ARGS+=(--ignore-platform-reqs)
@@ -218,74 +459,166 @@ if [[ -n "$COMPOSER_INSTALL_EXTRA_ARGS" ]]; then
   COMPOSER_ARGS+=("${EXTRA_ARR[@]}")
 fi
 
-docker run --rm \
+# COMPOSER_HOME keeps the cache off the read-only default home the `-u` mapping lands on.
+run docker run --rm \
   -u "$(id -u):$(id -g)" \
   -v "$(pwd):/var/www/html" \
   -w /var/www/html \
+  -e COMPOSER_HOME=/tmp/composer \
   "$COMPOSER_DOCKER_IMAGE" \
   composer "${COMPOSER_ARGS[@]}"
 
 if [[ "$SKIP_SAIL_UP" == true ]]; then
-  printf '\033[0;33mSkipping sail up (--skip-sail-up=true).\033[0m\n'
+  warn "Skipping sail up (--skip-sail-up=true)."
 elif [[ "$SAIL_DETACHED" == true ]]; then
-  printf '\033[44mStarting Sail (detached)...\033[0m\n'
+  step "Starting Sail (detached)..."
   run_sail up -d
 else
-  printf '\033[0;31mBlocking sail up would prevent later steps in this script. Use --sail-detached=true (default), or start Sail yourself then re-run with --skip-sail-up=true.\033[0m\n' >&2
-  exit 1
+  fail "Blocking sail up would prevent later steps in this script. Use --sail-detached=true (default), or start Sail yourself then re-run with --skip-sail-up=true."
 fi
 
-printf '\033[44mGenerating application key...\033[0m\n'
-run_sail_artisan key:generate
+if [[ "$WITH_KEY_GENERATE" == true ]]; then
+  step "Generating application key..."
+  if [[ -n "$(env_value APP_KEY)" ]] && [[ "$FORCE_KEY" != true ]]; then
+    warn "Skipping key:generate: APP_KEY is already set. Rotating it would invalidate existing encrypted data and sessions (use --force-key=true)."
+  else
+    run_sail_artisan key:generate
+  fi
+fi
 
 if [[ "$WITH_MIGRATE_SEED" == true ]]; then
-  printf '\033[44mRunning migrations and seeders...\033[0m\n'
+  step "Running migrations and seeders..."
   run_sail_artisan migrate --seed
 fi
 
-if [[ "$WITH_HOSTS" == true ]]; then
-  if grep -Fq "$HOSTS_LINE" /etc/hosts 2>/dev/null; then
-    printf '\033[0;33mSkipping /etc/hosts: entry already present.\033[0m\n'
+if [[ "$WITH_NPM_INSTALL" == true ]]; then
+  if [[ -f package.json ]]; then
+    step "Installing npm dependencies..."
+    run_npm install
   else
-    printf '\033[44mAdding hosts entry (sudo)...\033[0m\n'
+    warn "Skipping npm install (package.json not found)."
+  fi
+fi
+
+if [[ ${#EXTRA_ARTISAN[@]} -gt 0 ]]; then
+  step "Running project Artisan commands..."
+  for cmd in "${EXTRA_ARTISAN[@]}"; do
+    read -r -a cmd_args <<< "$cmd"
+    run_sail_artisan "${cmd_args[@]}"
+  done
+fi
+
+if [[ "$WITH_NPM_BUILD" == true ]]; then
+  if [[ -f package.json ]]; then
+    step "Building frontend assets..."
+    run_npm run build
+  else
+    warn "Skipping npm run build (package.json not found)."
+  fi
+fi
+
+if [[ "$WITH_HOSTS" == true ]]; then
+  step "Adding hosts entry (sudo)..."
+  HOSTS_PRESENT=true
+  for host in $(printf '%s\n' "$HOSTS_LINE" | awk '{for (i = 2; i <= NF; i++) print $i}'); do
+    if ! grep -qE "^[^#]*[[:space:]]${host}([[:space:]]|\$)" /etc/hosts 2>/dev/null; then
+      HOSTS_PRESENT=false
+      break
+    fi
+  done
+  if [[ "$HOSTS_PRESENT" == true ]]; then
+    warn "Skipping /etc/hosts: every hostname already resolves."
+  elif [[ "$DRY_RUN" == true ]]; then
+    printf "${YELLOW}+ append '%s' to /etc/hosts${RESET}\n" "$HOSTS_LINE"
+  else
+    printf "${YELLOW}+ append '%s' to /etc/hosts${RESET}\n" "$HOSTS_LINE"
     echo "$HOSTS_LINE" | sudo tee -a /etc/hosts > /dev/null
   fi
 fi
 
 if [[ "$WITH_IDE_HELPER" == true ]]; then
-  printf '\033[44mIDE Helper (generate, meta)...\033[0m\n'
+  step "IDE Helper (generate, meta)..."
   run_sail_artisan ide-helper:generate
   run_sail_artisan ide-helper:meta
 fi
 
 if [[ "$WITH_OPENAPI" == true ]]; then
-  printf '\033[44mGenerating OpenAPI documentation...\033[0m\n'
-  run_sail php ./vendor/bin/openapi app -o storage/app/private/api.json -f json
+  step "Generating OpenAPI documentation..."
+  run_sail php ./vendor/bin/openapi "$OPENAPI_SOURCE" -o "$OPENAPI_OUTPUT" -f json
 fi
 
 if [[ "$WITH_STORAGE_LINK" == true ]]; then
-  printf '\033[44mStorage link...\033[0m\n'
+  step "Storage link..."
   run_sail_artisan storage:link
 fi
 
 if [[ "$WITH_PRE_COMMIT_HOOK" == true ]]; then
   if [[ ! -d .git ]]; then
-    printf '\033[0;33mSkipping pre-commit hook: no .git directory.\033[0m\n'
+    warn "Skipping pre-commit hook: no .git directory."
   else
-    printf '\033[44mInstalling pre-commit hook (reviewer)...\033[0m\n'
+    step "Installing pre-commit hook (reviewer)..."
     HOOK_PATH=".git/hooks/pre-commit"
-    # shellcheck disable=SC2016
-    {
-      printf '%s\n' '#!/bin/sh'
-      printf 'exec ./vendor/bin/reviewer --staged-only=true'
-      if [[ -n "$REVIEWER_HOOK_ARGS" ]]; then
-        printf ' %s' "$REVIEWER_HOOK_ARGS"
-      fi
-      printf '\n'
-    } > "$HOOK_PATH"
-    chmod +x "$HOOK_PATH"
+    if [[ -f "$HOOK_PATH" ]]; then
+      HOOK_BACKUP="${HOOK_PATH}.backup.$(date +%Y%m%d%H%M%S)"
+      info "Backing the existing hook up to ${HOOK_BACKUP}"
+      run cp "$HOOK_PATH" "$HOOK_BACKUP"
+    fi
+    if [[ "$DRY_RUN" == true ]]; then
+      printf "${YELLOW}+ write %s${RESET}\n" "$HOOK_PATH"
+    else
+      # shellcheck disable=SC2016
+      {
+        printf '%s\n' '#!/bin/sh'
+        printf 'exec ./vendor/bin/reviewer --staged-only=true'
+        if [[ -n "$REVIEWER_HOOK_ARGS" ]]; then
+          printf ' %s' "$REVIEWER_HOOK_ARGS"
+        fi
+        printf '\n'
+      } > "$HOOK_PATH"
+      chmod +x "$HOOK_PATH"
+    fi
   fi
 fi
 
-printf '\033[0;32mInstaller finished.\033[0m\n'
-printf '\033[0;36mHappy building — ship something great.\033[0m\n'
+############################################
+# Report
+############################################
+CURRENT_STEP="final report"
+
+if [[ -n "$REQUIRE_ENV" ]] && [[ -f .env ]]; then
+  BLANKS=()
+  IFS=',' read -r -a REQUIRED_KEYS <<< "$REQUIRE_ENV"
+  for key in "${REQUIRED_KEYS[@]}"; do
+    key="${key// /}"
+    [[ -n "$key" ]] || continue
+    if [[ -z "$(env_value "$key")" ]]; then
+      BLANKS+=("$key")
+    fi
+  done
+  if [[ ${#BLANKS[@]} -gt 0 ]]; then
+    warn "These .env values are still blank; the features behind them stay dark until you fill them in:"
+    for key in "${BLANKS[@]}"; do
+      printf "${YELLOW}    %s${RESET}\n" "$key"
+    done
+  fi
+fi
+
+if [[ "$WITH_VERIFY" == true ]]; then
+  APP_URL="$(env_value APP_URL)"
+  if [[ -z "$APP_URL" ]]; then
+    warn "Skipping verification: APP_URL is not set in .env."
+  elif ! command -v curl > /dev/null 2>&1; then
+    warn "Skipping verification: curl is not installed."
+  else
+    step "Verifying ${APP_URL}..."
+    STATUS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$APP_URL" || printf '000')
+    case "$STATUS" in
+      2*|3*) info "${APP_URL} responded ${STATUS}." ;;
+      000) warn "${APP_URL} did not respond. Check './vendor/bin/sail ps' and the /etc/hosts entry." ;;
+      *) warn "${APP_URL} responded ${STATUS}. Check './vendor/bin/sail logs' before you start work." ;;
+    esac
+  fi
+fi
+
+printf "${GREEN}Installer finished.${RESET}\n"
+printf "${CYAN}Happy building — ship something great.${RESET}\n"
