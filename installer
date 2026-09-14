@@ -321,18 +321,29 @@ run() {
   "$@"
 }
 
+# Sail decides whether to pass `-T` from stdin alone. With a terminal on stdin but a redirected
+# stdout it asks `docker compose exec` for a TTY it cannot get, and the step dies on "unable to set
+# IO streams as raw terminal". Nothing this script runs reads stdin, so close it and let Sail add -T.
+run_without_stdin() {
+  printf "${YELLOW}+ %s${RESET}\n" "$*"
+  if [[ "$DRY_RUN" == true ]]; then
+    return 0
+  fi
+  "$@" < /dev/null
+}
+
 run_sail() {
-  run "$SAIL_BIN" "$@"
+  run_without_stdin "$SAIL_BIN" "$@"
 }
 
 run_sail_artisan() {
-  run "$SAIL_BIN" artisan "$@"
+  run_without_stdin "$SAIL_BIN" artisan "$@"
 }
 
 run_npm() {
   local npm_args
   read -r -a npm_args <<< "$NPM_CMD"
-  run "${npm_args[@]}" "$@"
+  run_without_stdin "${npm_args[@]}" "$@"
 }
 
 # Reads a key from .env without sourcing it: values may contain spaces, quotes or `#`.
