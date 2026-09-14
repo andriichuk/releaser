@@ -549,7 +549,9 @@ fi
 
 if [[ "$WITH_STORAGE_LINK" == true ]]; then
   step "Storage link..."
-  if [[ -e public/storage ]]; then
+  # Sail points the link at the container's /var/www/html, so on the host it is a dangling
+  # symlink: -e is false while Laravel still refuses to recreate it.
+  if [[ -L public/storage || -e public/storage ]]; then
     warn "Skipping storage:link: public/storage already exists."
   else
     run_sail_artisan storage:link
