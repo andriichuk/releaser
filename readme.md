@@ -323,7 +323,7 @@ The `installer` script runs a one-shot local [Laravel Sail](https://laravel.com/
 * **Hosts** — append one line to `/etc/hosts` via `sudo` (optional; skipped when every hostname on the line already resolves)
 * **IDE Helper** — `ide-helper:generate` and `ide-helper:meta` (optional, default off)
 * **OpenAPI** — `sail php ./vendor/bin/openapi <source> -o <output> -f json` (optional)
-* **Storage** — `storage:link` (optional)
+* **Storage** — `storage:link` (optional; skipped when `public/storage` already exists)
 * **Pre-commit** — `.git/hooks/pre-commit` with `exec ./vendor/bin/reviewer ...`; an existing hook is backed up first (optional)
 * **Report** — list any `--require-env` keys still blank, then request `APP_URL` and report the status code
 

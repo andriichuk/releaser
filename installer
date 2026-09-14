@@ -549,7 +549,11 @@ fi
 
 if [[ "$WITH_STORAGE_LINK" == true ]]; then
   step "Storage link..."
-  run_sail_artisan storage:link
+  if [[ -e public/storage ]]; then
+    warn "Skipping storage:link: public/storage already exists."
+  else
+    run_sail_artisan storage:link
+  fi
 fi
 
 if [[ "$WITH_PRE_COMMIT_HOOK" == true ]]; then
