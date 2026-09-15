@@ -182,6 +182,7 @@ All options accept `true`, `1`, `yes` or `false`, `0`, `no`. Defaults are `true`
 | `--with-php-lint`          | `true`  | Run `php -l` on changed PHP files                 |
 | `--with-phpstan`           | `true`  | Run PHPStan on changed PHP files                  |
 | `--with-tests`             | `true`  | Full suite if app code changed; else changed `tests/` files only |
+| `--test-args`              | *(empty)* | Extra arguments appended to the test command (e.g. `--parallel`, `--stop-on-failure`) |
 | `--with-composer-audit`    | `true`  | Run `composer audit`                             |
 | `--with-npm-audit`         | `false` | Run `npm audit` when `package.json` exists      |
 | `--with-api-spec`          | `false` | Generate OpenAPI spec when app code changed (requires `vendor/bin/openapi`) |
@@ -195,6 +196,9 @@ All options accept `true`, `1`, `yes` or `false`, `0`, `no`. Defaults are `true`
 
 # Skip tests and Composer audit
 ./vendor/bin/reviewer --with-tests=false --with-composer-audit=false
+
+# Run the suite in parallel (needs brianium/paratest in the project)
+./vendor/bin/reviewer --test-args=--parallel
 
 # Run file-based checks on the whole project (not just staged)
 ./vendor/bin/reviewer --full=true

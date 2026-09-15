@@ -12,6 +12,7 @@ WITH_DUMPS_CHECK=true
 WITH_PHP_LINT=true
 WITH_PHPSTAN=true
 WITH_TESTS=true
+TEST_ARGS=""
 WITH_COMPOSER_AUDIT=true
 WITH_NPM_AUDIT=false
 WITH_API_SPEC=false
@@ -41,6 +42,7 @@ usage() {
   printf '  --with-php-lint=BOOL    Run php -l on changed files (default: true)\n'
   printf '  --with-phpstan=BOOL    Run PHPStan on changed files (default: true)\n'
   printf '  --with-tests=BOOL       Run tests for changed test files, or full suite if app code changed (default: true)\n'
+  printf '  --test-args=ARGS        Extra arguments appended to the test command, e.g. --parallel (default: none)\n'
   printf '  --with-composer-audit=BOOL  Run composer audit (default: true)\n'
   printf '  --with-npm-audit=BOOL   Run npm audit if package.json exists (default: false)\n'
   printf '  --with-api-spec=BOOL    Generate OpenAPI spec when app PHP files changed (default: false; requires vendor/bin/openapi)\n'
@@ -278,6 +280,9 @@ for arg in "$@"; do
         exit 1
       fi
       ;;
+    --test-args=*)
+      TEST_ARGS="${arg#*=}"
+      ;;
     --with-composer-audit=*)
       VALUE="${arg#*=}"
       if ! WITH_COMPOSER_AUDIT=$(parse_bool "$VALUE"); then
@@ -387,11 +392,11 @@ if [[ "$WITH_TESTS" == true ]]; then
 
   if has_changed_app_code; then
     printf '\033[44mRunning full test suite (application code changed)...\033[0m\n'
-    run "${PHP_CMD} artisan test --compact --ansi"
+    run "${PHP_CMD} artisan test --compact --ansi${TEST_ARGS:+ ${TEST_ARGS}}"
   elif ((${#changed_test_files[@]} > 0)); then
     printf '\033[44mRunning tests for %s changed test file(s)...\033[0m\n' "${#changed_test_files[@]}"
     # shellcheck disable=SC2086
-    run "${PHP_CMD} artisan test --compact --ansi$(quoted_changed_test_files)"
+    run "${PHP_CMD} artisan test --compact --ansi${TEST_ARGS:+ ${TEST_ARGS}}$(quoted_changed_test_files)"
   else
     printf '\033[0;33mSkipping tests: no changed test or application PHP files.\033[0m\n'
   fi
